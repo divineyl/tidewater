@@ -1,6 +1,21 @@
 import { Vector3, Quaternion } from '../engine/index.js';
 import { G } from '../engine/render/Frame.js';
 
+export const VEHICLE_PAINTS = {
+	stock: null,
+	coral: 0xd96848,
+	teal: 0x267f7c,
+	sand: 0xd9a84c,
+	obsidian: 0x232930,
+	pearl: 0xede7dc,
+};
+
+export const VEHICLE_LIGHT_TINTS = {
+	warm: { rgb: [ 1.0, 0.93, 0.78 ], hex: 0xffefc2 },
+	led: { rgb: [ 0.84, 0.94, 1.0 ], hex: 0xd8f0ff },
+	amber: { rgb: [ 1.0, 0.74, 0.28 ], hex: 0xffbc47 },
+};
+
 const _fwd = new Vector3();
 const _right = new Vector3();
 
@@ -55,6 +70,8 @@ export class Vehicle {
 		this.surface = 'sand';
 		this.driftAmount = 0;
 		this.airborne = false;
+		this.paintId = 'stock';
+		this.lightTint = 'warm';
 
 		this.upgrades = {
 			gripMul: 1,
@@ -187,6 +204,20 @@ export class Vehicle {
 	}
 
 	update( _dt ) {}
+
+	setPaint( id ) {
+
+		this.paintId = Object.prototype.hasOwnProperty.call( VEHICLE_PAINTS, id ) ? id : 'stock';
+		if ( this.model && typeof this.model.setPaint === 'function' ) this.model.setPaint( this.paintId );
+
+	}
+
+	setLightTint( id ) {
+
+		this.lightTint = Object.prototype.hasOwnProperty.call( VEHICLE_LIGHT_TINTS, id ) ? id : 'warm';
+		if ( this.model && typeof this.model.setLightTint === 'function' ) this.model.setLightTint( this.lightTint );
+
+	}
 
 	applyUpgrades( stats ) {
 

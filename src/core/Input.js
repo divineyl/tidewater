@@ -53,6 +53,8 @@ export class Input {
 		this.locked = false;
 		this.enabled = true;
 		this.lookBlocked = false;
+		this.sensitivity = 1;
+		this.invertY = false;
 		this._lookFilter = { emaStep: 12, lastTime: 0, skipEvents: 0, graceUntil: 0 };
 		this._lastClientX = null;
 		this._lastClientY = null;
@@ -425,9 +427,11 @@ export class Input {
 
 		}
 
+		const sens = Number.isFinite( this.sensitivity ) ? Math.max( 0.2, Math.min( 4, this.sensitivity ) ) : 1;
+		const ySign = this.invertY ? - 1 : 1;
 		const l = {
-			x: Math.max( - 140, Math.min( 140, this.look.x ) ),
-			y: Math.max( - 140, Math.min( 140, this.look.y ) ),
+			x: Math.max( - 140, Math.min( 140, this.look.x ) ) * sens,
+			y: Math.max( - 140, Math.min( 140, this.look.y ) ) * sens * ySign,
 		};
 		this.look.x = 0;
 		this.look.y = 0;

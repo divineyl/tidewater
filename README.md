@@ -35,7 +35,7 @@
 - **钓鱼经济 × 载具改装联动：** 玛塔商店新增 `陆地载具改装` 区块，可将海钓收入用于升级 **全地形轮胎**（大幅减沙地阻力、增强湿滑抓地）、**陆地动力套件**（极速与扭矩暴涨）、**越野悬挂与涉水喉**（加强爬坡并显著提升深水耐受防熄火）、**车顶 LED 探照灯条**（夜间与暴风雨亮度/射程强化）。
 - **东岬景区公路 & 观景灯塔：** 新增通往东岬高地的平缓海景砂土盘山路与宏伟海边灯塔（含楼梯平台可攀爬、旋转菲涅尔透镜与双侧体积光柱）。
 - **地面脚印/车辙交互与 3D 信标地图导航：** 实时动态记录人物脚印、四轮沙土车辙与草地倒伏；按 `N` 展开全岛高德风导航地图点击标注目标，场景天际升起高空青色导航光柱并伴随方位测距。
-- **双语本地化、便捷设置与手柄支持：** 完整简体中文 / English 实时切换；浏览器本地配置与双载具停放位置自动记忆；纯净拍照模式（`P` 隐藏 HUD、`[`/`]` 变焦、`F2` 保存 PNG 截图）；支持 Xbox / PlayStation 手柄即插即用；修复 Pointer Lock 鼠标视角突然大跳变并优化车船追尾视角顺滑度。
+- **双语本地化、便捷设置与手柄支持：** 完整简体中文 / English 实时切换；支持鼠标视角灵敏度、Y 轴反转、4 路音频分轨音量、一键导出/导入 JSON 完整存档；支持 **6 款车身涂装与 3 种车灯色温切换**、**体积头灯光锥**（夜雨穿透效果）及**沙丘飞跃滞空特技播报**；纯净拍照模式新增**明信片水印开关**（叠加时间/天气/破纪录渔获）；内置在线贴图减重 **18 MB+** 与 Vite 分包提速，修复 Pointer Lock 视角突发跳变，支持 Xbox / PlayStation 手柄即插即用。
 
 ---
 
@@ -110,7 +110,7 @@ An island fishing and coastal exploration game for the browser running directly 
 - **Dynamic Weather System (`src/weather/`):** 6 weather presets with rain (`src/fx/Rain.js`), cloud lightning & delayed thunder (`src/fx/Lightning.js`), camera lens rain droplets (`src/post/LensDroplets.js`), and weather-responsive fish bite models (`src/game/Bites.js`).
 - **Dual Land Vehicles (`src/vehicles/`) & Economy Upgrades (`src/game/Gear.js`):** Procedural Coastal Scrambler Motorcycle and 4-Wheel Coastal Buggy with multi-terrain suspension/tire/water physics, particle spray/dust (`src/fx/VehicleFX.js`), wheel ground tracks & grass trampling (`src/fx/GroundInteraction.js`), plus four purchasable garage upgrade tracks at Marta's Chandlery.
 - **East Headland Road, Lighthouse & Waypoints (`src/world/Lighthouse.js`, `src/game/Minimap.js`, `src/fx/WaypointBeacon.js`):** Graded coastal road to East Headland Lighthouse, expandable full-island map (`N`), and 3D cyan light-pillar waypoint navigation.
-- **Bilingual UI, Gamepad, Quality Presets & Camera Fixes:** Simplified Chinese / English localization (`src/i18n/`), `localStorage` persistence (`src/core/Prefs.js`), gamepad support, pointer-lock spike filtering (`src/core/Input.js`), and GitHub Pages + portable bundle packaging (`scripts/pack-portable.mjs`).
+- **Bilingual UI, Gamepad, Liveries, Presets & Camera Fixes:** Simplified Chinese / English localization (`src/i18n/`), `localStorage` persistence + JSON save export/import (`src/core/Prefs.js`), mouse sensitivity & Y-axis invert, 4-bus audio mixer, customizable vehicle paint liveries & volumetric headlight cones, jump-airtime stunt telemetry, photo postcard watermarks, ~18 MB lighter compressed online textures (`scripts/optimize-assets.mjs`), pointer-lock spike filtering (`src/core/Input.js`), and GitHub Pages + portable bundle packaging (`scripts/pack-portable.mjs`).
 
 Every push to `main` runs `npm test && npm run build` and deploys to GitHub Pages via `.github/workflows/deploy.yml`.
 
@@ -134,8 +134,8 @@ Every push to `main` runs `npm test && npm run build` and deploys to GitHub Page
 | `src/audio/` | 基于 Web Audio 与实录采样/合成的立体声效与车辆/雷雨声场 |
 | `src/i18n/` | 简体中文 / English 完整词典与实时语言切换系统 |
 | `src/ui/` | 毛玻璃设置面板、载屏、快捷帮助、拍照模式与双语 HUD |
-| `scripts/` | `pack-portable.mjs` 离线便携包与贴图压缩构建脚本 |
-| `test/` | 6 组 Node 无头自动化单元测试（钓鱼、载具物理、天气地图、双语、视角修复） |
+| `scripts/` | `optimize-assets.mjs` 在线贴图压缩与 `pack-portable.mjs` 离线便携构建脚本 |
+| `test/` | 7 组 Node 无头自动化单元测试（钓鱼、载具物理、天气地图、改装、双语、视角与灵敏度） |
 | `tools/` | 角色、摊位扫描资源与音频拉取转换工具 |
 
 ---

@@ -79,6 +79,7 @@ export class CoastalBuggy extends Vehicle {
 		this.rearWheelWorld = new Vector3();
 
 		this.onLand = null;
+		this.onJumpLand = null;
 		this.onShiftPop = null;
 		this.onSplash = null;
 
@@ -86,6 +87,9 @@ export class CoastalBuggy extends Vehicle {
 		this._prevGear = 1;
 		this._wasHighThrottle = false;
 		this._splashCooldown = 0;
+		this._airTime = 0;
+		this._airStartX = 0;
+		this._airStartZ = 0;
 
 		this._placeOnGround( this.position.x, this.position.z, this.spawnHeading );
 		this._syncModel();
@@ -174,6 +178,7 @@ export class CoastalBuggy extends Vehicle {
 		this.dynPitch = 0;
 		this.dynRoll = 0;
 		this.airborne = false;
+		this._airTime = 0;
 		this.velocity.set( 0, 0, 0 );
 		this.speed = 0;
 		this.forwardSpeed = 0;
@@ -310,21 +315,33 @@ export class CoastalBuggy extends Vehicle {
 		const groundY = ( ch[ 0 ] + ch[ 1 ] + ch[ 2 ] + ch[ 3 ] ) * 0.25;
 		const prevAirborne = this.airborne;
 
-		if ( this.position.y > groundY + 0.08 || this.velocity.y > 0.25 ) {
+		if ( prevAirborne || this.position.y > groundY + 0.08 || this.velocity.y > 0.25 ) {
 
+			if ( ! prevAirborne ) {
+
+				this._airTime = 0;
+				this._airStartX = this.position.x;
+				this._airStartZ = this.position.z;
+
+			}
+
+			this._airTime += dt;
 			this.airborne = true;
 			this.velocity.y -= GRAV * dt;
 			this.position.y += this.velocity.y * dt;
-			if ( this.position.y <= groundY ) {
+			if ( this.position.y <= groundY + 0.02 ) {
 
 				this.position.y = groundY;
-				if ( prevAirborne && this.velocity.y < - 1.2 ) {
+				const impact = clamp( - this.velocity.y / 9, 0.2, 1 );
+				if ( prevAirborne && this.velocity.y < - 1.2 && this.onLand ) this.onLand( impact );
+				if ( prevAirborne && this._airTime >= 0.60 ) {
 
-					const impact = clamp( - this.velocity.y / 9, 0, 1 );
-					if ( this.onLand ) this.onLand( impact );
+					const dist = Math.hypot( this.position.x - this._airStartX, this.position.z - this._airStartZ );
+					if ( dist >= 3.0 && this.onJumpLand ) this.onJumpLand( { airTime: this._airTime, distance: dist, impact } );
 
 				}
 
+				this._airTime = 0;
 				this.velocity.y = 0;
 				this.airborne = false;
 
@@ -332,6 +349,7 @@ export class CoastalBuggy extends Vehicle {
 
 		} else {
 
+			this._airTime = 0;
 			this.airborne = false;
 			this.position.y += ( groundY - this.position.y ) * ( 1 - Math.exp( - dt * 22 ) );
 			this.velocity.y = 0;
@@ -576,6 +594,9 @@ export class CoastalBuggy extends Vehicle {
 			ledBoost: ( this.upgrades?.lightMul || 1 ) > 1.2,
 			brakeLight: this.brakeLight,
 			runningLight: this.occupied && ! this.waterStalled,
+			night: G && G.night ? G.night.value : 0,
+			rain: G && G.weather ? G.weather.value.x : 0,
+			storm: G && G.weather ? G.weather.value.z : 0,
 		} );
 
 	}

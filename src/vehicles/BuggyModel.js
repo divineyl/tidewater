@@ -1,5 +1,6 @@
 import {
 	BoxGeometry,
+	Color,
 	CylinderGeometry,
 	Group,
 	MathUtils,
@@ -9,8 +10,11 @@ import {
 	TorusGeometry,
 	Vector3,
 } from '../engine/index.js';
+import { LAYERS } from '../engine/render/SceneRenderer.js';
 import { GeoKit, alignY, mat4, mergePrepared, prepare } from '../world/boat/GeoKit.js';
+import { Material } from '../engine/render/Material.js';
 import { physical, standard } from '../materials/Materials.js';
+import { VEHICLE_PAINTS, VEHICLE_LIGHT_TINTS } from './Vehicle.js';
 
 const WHEELBASE = 2.38;
 const HALF_WB = WHEELBASE * 0.5; // 1.19 m
@@ -42,8 +46,24 @@ function makePBR( isPaint ) {
 		attributes: { aux: 'vec4f' },
 		varyings: { vAux: 'vec4f' },
 		vertex: 'o.vAux = v.aux;',
+		...( isPaint ? {
+			uniforms: {
+				paintColor: [ 'vec3f', new Vector3( 1, 1, 1 ) ],
+				paintReplace: [ 'f32', 0 ],
+			},
+		} : {} ),
 		// WGSL rule: never declare locals named s, in, v, o, or r
-		surface: /* wgsl */`
+		surface: isPaint ? /* wgsl */`
+	let pAux = in.vs.vAux;
+	let baseC = in.color.rgb;
+	let mxC = max( baseC.r, max( baseC.g, baseC.b ) );
+	let mnC = min( baseC.r, min( baseC.g, baseC.b ) );
+	let satC = ( mxC - mnC ) / max( mxC, 0.001 );
+	let maskC = smoothstep( 0.42, 0.62, satC ) * mat.paintReplace;
+	s.albedo = mix( baseC, mat.paintColor, maskC );
+	s.roughness = pAux.x;
+	s.metalness = pAux.y;
+` : /* wgsl */`
 	let pAux = in.vs.vAux;
 	s.albedo = in.color.rgb;
 	s.roughness = pAux.x;
@@ -55,6 +75,36 @@ function makePBR( isPaint ) {
 		: standard( { roughness: 0.52, metalness: 0.35, ...base } );
 	m.name = isPaint ? 'buggyPaint' : 'buggyParts';
 	return m;
+
+}
+
+const _paintTmp = new Color();
+
+function makeHeadlightBeamMaterial( name ) {
+
+	return new Material( {
+		name,
+		lit: false,
+		transparent: true,
+		blending: 'additive',
+		depthWrite: false,
+		side: 'double',
+		uniforms: {
+			beamColor: [ 'vec3f', new Vector3( 1.0, 0.91, 0.72 ) ],
+			beamAlpha: [ 'f32', 0 ],
+		},
+		// WGSL rule: never declare locals s, in, v, o, or r
+		surface: /* wgsl */`
+	let uAx = clamp( 1.0 - in.uv.y, 0.0, 1.0 );
+	let axial = smoothstep( 0.0, 0.05, uAx ) * pow( 1.0 - uAx, 1.85 );
+	let fres = pow( abs( dot( normalize( in.N ), normalize( in.V ) ) ), 1.65 );
+	let alp = clamp( axial * fres * 0.26 * mat.beamAlpha, 0.0, 0.52 );
+	if ( alp < 0.002 ) { discard; }
+	s.albedo = mat.beamColor * ( 1.35 * mat.beamAlpha );
+	s.emissive = vec3f( 0.0 );
+	s.alpha = alp;
+`,
+	} );
 
 }
 
@@ -271,6 +321,30 @@ export class BuggyModel {
 			receive: false,
 		} );
 
+		// Twin volumetric headlight cones anchored at the front headlamps
+		this.beamMat = makeHeadlightBeamMaterial( 'buggy-headlight-beam' );
+		this.beamMesh = new Group();
+		this.beamMesh.name = 'buggy-beams';
+		this.beamMesh.position.set( 0, 0.76, 1.65 );
+		this.beamMesh.rotation.x = Math.asin( 0.14 );
+		this.beamMesh.visible = false;
+		const coneGeo = new CylinderGeometry( 0.09, 1.72, 15.0, 20, 1, true );
+		coneGeo.rotateX( - Math.PI * 0.5 );
+		coneGeo.translate( 0, 0, 7.5 );
+		for ( const sx of [ - 0.54, 0.54 ] ) {
+
+			const m = addPart( this.beamMesh, 'buggy-beam-' + sx, coneGeo, this.beamMat, {
+				pos: new Vector3( sx, 0, 0 ),
+				cast: false,
+				receive: false,
+			} );
+			m.layers.set( LAYERS.TRANSPARENT );
+			m.frustumCulled = false;
+
+		}
+
+		this.chassisGroup.add( this.beamMesh );
+
 		for ( const sx of [ - 0.54, 0.54 ] ) {
 
 			addPart( this.chassisGroup, 'buggy-tail-' + sx, new BoxGeometry( 0.14, 0.065, 0.04 ), this.taillightMat, {
@@ -392,6 +466,49 @@ export class BuggyModel {
 		this.headlightMat.emissiveIntensity = state.headlightOn ? 4.2 * boost : 0.04;
 		this.ledBarMat.emissiveIntensity = state.headlightOn ? ( state.ledBoost ? 6.8 : 2.6 ) : 0.05;
 		this.taillightMat.emissiveIntensity = state.brakeLight ? 4.4 : ( state.runningLight ? 0.9 : 0.06 );
+		if ( this.beamMesh && this.beamMat ) {
+
+			const weatherVis = Math.max( state.night || 0, ( state.rain || 0 ) * 0.75, ( state.storm || 0 ) * 0.9 );
+			const visAlpha = 0.24 + 0.88 * weatherVis;
+			this.beamMat.uniforms.beamAlpha.value = state.headlightOn ? visAlpha * ( state.ledBoost ? 1.45 : 1.0 ) : 0;
+			this.beamMesh.visible = !! state.headlightOn;
+			this.beamMesh.scale.set( state.ledBoost ? 1.18 : 1.0, state.ledBoost ? 1.18 : 1.0, state.ledBoost ? 1.28 : 1.0 );
+
+		}
+
+	}
+
+	setPaint( id ) {
+
+		const hex = VEHICLE_PAINTS[ id ];
+		if ( ! this.paintMat?.uniforms ) return;
+		if ( hex == null ) {
+
+			this.paintMat.uniforms.paintReplace.value = 0;
+
+		} else {
+
+			_paintTmp.setHex( hex );
+			this.paintMat.uniforms.paintColor.value.set( _paintTmp.r, _paintTmp.g, _paintTmp.b );
+			this.paintMat.uniforms.paintReplace.value = 1;
+
+		}
+
+	}
+
+	setLightTint( id ) {
+
+		const t = VEHICLE_LIGHT_TINTS[ id ] || VEHICLE_LIGHT_TINTS.warm;
+		_paintTmp.setHex( t.hex );
+		this.headlightMat.color.copy( _paintTmp );
+		this.headlightMat.emissive.copy( _paintTmp );
+		this.ledBarMat.color.copy( _paintTmp );
+		this.ledBarMat.emissive.copy( _paintTmp );
+		if ( this.beamMat?.uniforms?.beamColor ) {
+
+			this.beamMat.uniforms.beamColor.value.set( _paintTmp.r, _paintTmp.g, _paintTmp.b );
+
+		}
 
 	}
 

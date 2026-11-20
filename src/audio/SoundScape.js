@@ -136,6 +136,8 @@ export class SoundScape {
 		this._failed = false;
 		this._muted = false;
 		this._volume = 0.8;
+		this._subVol = { ambient: 1, vehicle: 1, fishing: 1, weather: 1 };
+		this._subBus = {};
 		this._buffers = new Map(); // name -> AudioBuffer
 		this._loading = new Map(); // name -> Promise
 		this._beds = new Map(); // name -> { src, gain, trim }
@@ -259,6 +261,14 @@ export class SoundScape {
 
 		this._volume = clamp( num( v, this._volume ), 0, 1 );
 		this._applyVolume();
+
+	}
+
+	setCategoryVolume( category, v ) {
+
+		if ( ! ( category in this._subVol ) ) return;
+		this._subVol[ category ] = clamp( num( v, this._subVol[ category ] ), 0, 1 );
+		this._applySubVolumes();
 
 	}
 
@@ -458,7 +468,7 @@ export class SoundScape {
 		const d = Math.max( 60, num( distanceMeters, 600 ) );
 		const str = clamp( num( strength, 1 ), 0.3, 1.5 );
 
-		const pan = this._panner( this.above, 260, 0.45 );
+		const pan = this._panner( this.weatherBus || this.above, 260, 0.45 );
 		pan.positionX.value = x;
 		pan.positionY.value = y;
 		pan.positionZ.value = z;
@@ -570,22 +580,32 @@ export class SoundScape {
 		this.under = gain( 0, this.master );
 		this.near = gain( 1, this.master );
 		this.foot = gain( 1, this.above );
+		this.ambientBus = gain( 1, this.above );
+		this.vehBus = gain( 1, this.above );
+		this.rodBus = gain( 1, this.above );
+		this.weatherBus = gain( 1, this.above );
+		this._subBus = {
+			ambient: this.ambientBus,
+			vehicle: this.vehBus,
+			fishing: this.rodBus,
+			weather: this.weatherBus,
+		};
 
 		// distant surf: from the shore direction
-		this.surfPan = panner( this.above, 1, 0 );
+		this.surfPan = panner( this.ambientBus, 1, 0 );
 		this.surfFar = gain( 1, this.surfPan );
 
 		// the boat: positional from outside; at the helm it surrounds you (through the hull), unpanned
-		this.boatPan = panner( this.above, 3, 1 );
+		this.boatPan = panner( this.vehBus, 3, 1 );
 		this.boatOut = gain( 1, this.boatPan );
-		this.boatIn = gain( 0, this.above );
+		this.boatIn = gain( 0, this.vehBus );
 		this.boatSum = gain( 1, this.boatOut );
 		this.boatSum.connect( this.boatIn );
 		this.engineLP = lowpass( 1200, 0.6, this.boatSum );
 		// vehicle: positional when standing beside it, stereo centered when riding
-		this.vehPan = panner( this.above, 4, 1.1 );
+		this.vehPan = panner( this.vehBus, 4, 1.1 );
 		this.vehOut = gain( 1, this.vehPan );
-		this.vehIn = gain( 0, this.above );
+		this.vehIn = gain( 0, this.vehBus );
 		this.vehSum = gain( 1, this.vehOut );
 		this.vehSum.connect( this.vehIn );
 		this.vehEngLP = lowpass( 650, 1.4, this.vehSum );
@@ -597,8 +617,8 @@ export class SoundScape {
 		this.vehTireGain = gain( 0, this.vehSum );
 		this.vehTireBP.connect( this.vehTireGain );
 
-		this.pierPan = panner( this.above, 3, 1.3 );
-		this.windLP = lowpass( 1400, 0.5, this.above );
+		this.pierPan = panner( this.ambientBus, 3, 1.3 );
+		this.windLP = lowpass( 1400, 0.5, this.ambientBus );
 
 		// procedural stereo noise buffer (3s seamless) for rain & thunder synthesis
 		const sr = c.sampleRate, len = sr * 3;
@@ -625,8 +645,8 @@ export class SoundScape {
 
 		this._noiseBuf = buf;
 
-		// procedural rain bed (fine hiss + patter body -> shelter LP -> above)
-		this.rainOut = gain( 0, this.above );
+		// procedural rain bed (fine hiss + patter body -> shelter LP -> weatherBus)
+		this.rainOut = gain( 0, this.weatherBus );
 		this.rainLP = lowpass( 10500, 0.55, this.rainOut );
 		this.rainFine = c.createBiquadFilter();
 		this.rainFine.type = 'bandpass';
@@ -646,11 +666,11 @@ export class SoundScape {
 		if ( this.rodPan ) {
 
 			this.rodPan.pan.value = 0.25;
-			this.rodPan.connect( this.above );
+			this.rodPan.connect( this.rodBus );
 
 		}
 
-		this.rod = gain( 1, this.rodPan || this.above );
+		this.rod = gain( 1, this.rodPan || this.rodBus );
 
 		// whale song: positional at the whale, its own path (open underwater, faint and dull from above)
 		this.songOut = gain( dB( - 20 ), this.master );
@@ -658,11 +678,12 @@ export class SoundScape {
 		this.songPan = panner( this.songLP, 30, 0.5 );
 
 		this._dest = {
-			surf_far: this.surfFar, wind: this.windLP, palms: this.above, crickets: this.above, pier_lap: this.pierPan,
-			under_reef: this.under, birds_dawn: this.above, whale_song: this.songPan,
+			surf_far: this.surfFar, wind: this.windLP, palms: this.ambientBus, crickets: this.ambientBus, pier_lap: this.pierPan,
+			under_reef: this.under, birds_dawn: this.ambientBus, whale_song: this.songPan,
 			boat_engine: this.engineLP, boat_rush: this.boatSum, boat_lap: this.boatSum,
 			reel_wind: this.rod, reel_drag: this.rod, line_strain: this.rod,
 		};
+		this._applySubVolumes();
 
 	}
 
@@ -671,6 +692,18 @@ export class SoundScape {
 		if ( ! this.master ) return;
 		const v = this._muted ? 0 : this._volume * this._volume;
 		this._ramp( this.master.gain, v, 0.05 );
+
+	}
+
+	_applySubVolumes() {
+
+		for ( const [ k, bus ] of Object.entries( this._subBus ) ) {
+
+			if ( ! bus ) continue;
+			const v = this._subVol[ k ] ?? 1;
+			this._ramp( bus.gain, v * v, 0.05 );
+
+		}
 
 	}
 
@@ -1638,7 +1671,7 @@ export class SoundScape {
 		g.gain.linearRampToValueAtTime( 0.11, now + 0.02 );
 		g.gain.setValueAtTime( 0.11, now + 0.18 );
 		g.gain.exponentialRampToValueAtTime( 0.0001, now + 0.25 );
-		g.connect( this.above );
+		g.connect( this.vehBus || this.above );
 
 		const freqs = kind === 'buggy' ? [ 330, 415 ] : [ 415, 523 ];
 		for ( const freq of freqs ) {

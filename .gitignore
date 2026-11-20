@@ -4,3 +4,4 @@ exports
 .DS_Store
 *.log
 *.tmp.jpg
+*.tmp.png

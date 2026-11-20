@@ -10,15 +10,24 @@ export const DEFAULT_PREFS = Object.freeze( {
 	ssr: true,
 	audioVolume: 1,
 	audioMuted: false,
+	volAmbient: 1,
+	volVehicle: 1,
+	volFishing: 1,
+	volWeather: 1,
 	weatherAuto: true,
 	weatherPreset: 'fair',
 	weatherSpeed: 1,
 	camMode: 'third',
 	fov: 62,
+	lookSensitivity: 1,
+	invertY: false,
 	vehPreset: 'realistic',
 	vehTopSpeed: 84,
 	vehRider: true,
 	vehHeadlight: false,
+	vehPaint: 'stock',
+	vehLightTint: 'warm',
+	photoPostcard: true,
 	motorcyclePose: null,
 	buggyPose: null,
 } );
@@ -49,6 +58,8 @@ export function normalizePrefs( raw ) {
 	const aaVal = aaOpts.includes( Number( src.aa ) ) ? Number( src.aa ) : DEFAULT_PREFS.aa;
 	const camMode = src.camMode === 'first' || src.camMode === 'third' ? src.camMode : DEFAULT_PREFS.camMode;
 	const vehPreset = src.vehPreset === 'arcade' || src.vehPreset === 'realistic' ? src.vehPreset : DEFAULT_PREFS.vehPreset;
+	const vehPaint = [ 'stock', 'coral', 'teal', 'sand', 'obsidian', 'pearl' ].includes( src.vehPaint ) ? src.vehPaint : DEFAULT_PREFS.vehPaint;
+	const vehLightTint = [ 'warm', 'led', 'amber' ].includes( src.vehLightTint ) ? src.vehLightTint : DEFAULT_PREFS.vehLightTint;
 	const weatherPreset = typeof src.weatherPreset === 'string' && src.weatherPreset ? src.weatherPreset : DEFAULT_PREFS.weatherPreset;
 
 	const normPose = ( pose ) => {
@@ -70,15 +81,24 @@ export function normalizePrefs( raw ) {
 		ssr: typeof src.ssr === 'boolean' ? src.ssr : DEFAULT_PREFS.ssr,
 		audioVolume: clamp( finite( Number( src.audioVolume ), DEFAULT_PREFS.audioVolume ), 0, 1 ),
 		audioMuted: typeof src.audioMuted === 'boolean' ? src.audioMuted : DEFAULT_PREFS.audioMuted,
+		volAmbient: clamp( finite( Number( src.volAmbient ), DEFAULT_PREFS.volAmbient ), 0, 1 ),
+		volVehicle: clamp( finite( Number( src.volVehicle ), DEFAULT_PREFS.volVehicle ), 0, 1 ),
+		volFishing: clamp( finite( Number( src.volFishing ), DEFAULT_PREFS.volFishing ), 0, 1 ),
+		volWeather: clamp( finite( Number( src.volWeather ), DEFAULT_PREFS.volWeather ), 0, 1 ),
 		weatherAuto: typeof src.weatherAuto === 'boolean' ? src.weatherAuto : DEFAULT_PREFS.weatherAuto,
 		weatherPreset,
 		weatherSpeed: clamp( finite( Number( src.weatherSpeed ), DEFAULT_PREFS.weatherSpeed ), 0.1, 10 ),
 		camMode,
 		fov: clamp( Math.round( finite( Number( src.fov ), DEFAULT_PREFS.fov ) ), 35, 100 ),
+		lookSensitivity: clamp( finite( Number( src.lookSensitivity ), DEFAULT_PREFS.lookSensitivity ), 0.4, 2.2 ),
+		invertY: typeof src.invertY === 'boolean' ? src.invertY : DEFAULT_PREFS.invertY,
 		vehPreset,
 		vehTopSpeed: clamp( Math.round( finite( Number( src.vehTopSpeed ), DEFAULT_PREFS.vehTopSpeed ) ), 50, 120 ),
 		vehRider: typeof src.vehRider === 'boolean' ? src.vehRider : DEFAULT_PREFS.vehRider,
 		vehHeadlight: typeof src.vehHeadlight === 'boolean' ? src.vehHeadlight : DEFAULT_PREFS.vehHeadlight,
+		vehPaint,
+		vehLightTint,
+		photoPostcard: typeof src.photoPostcard === 'boolean' ? src.photoPostcard : DEFAULT_PREFS.photoPostcard,
 		motorcyclePose,
 		buggyPose,
 	};
@@ -153,6 +173,53 @@ export function sanitizeVehiclePose( pose, terrain ) {
 	}
 
 	return { x, z, yaw };
+
+}
+
+export function buildSaveBundle( gameJSON, prefsData ) {
+
+	return {
+		app: 'tidewater',
+		version: 2,
+		exportedAt: new Date().toISOString(),
+		game: gameJSON && typeof gameJSON === 'object' ? gameJSON : null,
+		prefs: normalizePrefs( prefsData ),
+	};
+
+}
+
+export function parseSaveBundle( rawText ) {
+
+	try {
+
+		const data = typeof rawText === 'string' ? JSON.parse( rawText ) : rawText;
+		if ( ! data || typeof data !== 'object' ) return { ok: false, error: 'Invalid JSON root' };
+		if ( data.app === 'tidewater' && data.version === 2 ) {
+
+			const hasGame = !! ( data.game && data.game.v === 1 );
+			const hasPrefs = !! ( data.prefs && typeof data.prefs === 'object' );
+			if ( ! hasGame && ! hasPrefs ) return { ok: false, error: 'Bundle has no save or prefs payload' };
+			return {
+				ok: true,
+				game: hasGame ? data.game : null,
+				prefs: hasPrefs ? normalizePrefs( data.prefs ) : null,
+			};
+
+		}
+
+		if ( data.v === 1 && ( Array.isArray( data.inventory ) || Number.isFinite( data.money ) ) ) {
+
+			return { ok: true, game: data, prefs: null };
+
+		}
+
+		return { ok: false, error: 'Unrecognized Tidewater save format' };
+
+	} catch ( e ) {
+
+		return { ok: false, error: e && e.message ? e.message : 'Parse error' };
+
+	}
 
 }
 

@@ -4,6 +4,7 @@ import { commonModule } from '../engine/render/wgsl/common.js';
 import { surfaceModule } from '../engine/render/wgsl/lighting.js';
 import { G } from '../engine/render/Frame.js';
 import { SceneLighting } from './SceneLighting.js';
+import { VEHICLE_LIGHT_TINTS } from '../vehicles/Vehicle.js';
 
 // Local lights (lanterns, lamp posts, path lights, lit windows, the boat's cabin and navigation
 // lights, the handheld flashlight) without a light object per lamp: unrolling every light into every
@@ -361,6 +362,8 @@ export function addVehicleLights( lights, vehicle ) {
 			headObj.updateWorldMatrix( true, false );
 			this.position.copy( localHeadPos ).applyMatrix4( headObj.matrixWorld );
 			this.dir.copy( localHeadDir ).transformDirection( headObj.matrixWorld ).normalize();
+			const tint = VEHICLE_LIGHT_TINTS[ vehicle.lightTint ] || VEHICLE_LIGHT_TINTS.warm;
+			this.color.setRGB( tint.rgb[ 0 ], tint.rgb[ 1 ], tint.rgb[ 2 ] );
 			const u = vehicle.upgrades;
 			this.intensity = baseIntensity * ( u ? u.lightMul : 1 );
 			this.range = baseRange * ( u ? u.lightRangeMul : 1 );

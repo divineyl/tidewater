@@ -84,6 +84,7 @@ export class Motorcycle extends Vehicle {
 
 		// Events wired by App / SoundScape
 		this.onLand = null;
+		this.onJumpLand = null;
 		this.onShiftPop = null;
 		this.onSplash = null;
 
@@ -91,6 +92,9 @@ export class Motorcycle extends Vehicle {
 		this._prevGear = 1;
 		this._wasHighThrottle = false;
 		this._splashCooldown = 0;
+		this._airTime = 0;
+		this._airStartX = 0;
+		this._airStartZ = 0;
 
 		this._placeOnGround( this.position.x, this.position.z, this.spawnHeading );
 		this._syncModel();
@@ -163,6 +167,7 @@ export class Motorcycle extends Vehicle {
 		this.pitch = clamp( - Math.atan2( gFront - gRear, WHEELBASE ), - 0.6, 0.6 );
 		this.roll = this.occupied ? 0 : - 0.13;
 		this.airborne = false;
+		this._airTime = 0;
 		this.velocity.set( 0, 0, 0 );
 		this._composePose();
 		this.frontWheelWorld.set( x + fx * HALF_WB, gFront + 0.03, z + fz * HALF_WB );
@@ -334,6 +339,15 @@ export class Motorcycle extends Vehicle {
 		// Vertical kinematics & airborne gravity
 		if ( this.position.y > groundY + 0.08 ) {
 
+			if ( ! prevAirborne ) {
+
+				this._airTime = 0;
+				this._airStartX = this.position.x;
+				this._airStartZ = this.position.z;
+
+			}
+
+			this._airTime += dt;
 			this.airborne = true;
 			this.velocity.y -= GRAV * dt;
 			this.position.y += this.velocity.y * dt;
@@ -343,15 +357,23 @@ export class Motorcycle extends Vehicle {
 		const nextGroundMid = Math.max( gMid, groundY );
 		if ( this.position.y <= groundY + 0.08 ) {
 
+			const impact = clamp( - this.velocity.y / 9, 0.2, 1 );
 			if ( prevAirborne && this.velocity.y < - 1.2 ) {
 
-				const impact = clamp( - this.velocity.y / 9, 0, 1 );
 				this.frontComp = Math.min( 0.16, this.frontComp + impact * 0.14 );
 				this.rearComp = Math.min( 0.16, this.rearComp + impact * 0.14 );
 				if ( this.onLand ) this.onLand( impact );
 
 			}
 
+			if ( prevAirborne && this._airTime >= 0.60 ) {
+
+				const dist = Math.hypot( this.position.x - this._airStartX, this.position.z - this._airStartZ );
+				if ( dist >= 3.0 && this.onJumpLand ) this.onJumpLand( { airTime: this._airTime, distance: dist, impact } );
+
+			}
+
+			this._airTime = 0;
 			this.airborne = false;
 			if ( this.velocity.y < 0 ) this.velocity.y = 0;
 			const snapK = 1 - Math.exp( - dt * 26 );
@@ -674,6 +696,8 @@ export class Motorcycle extends Vehicle {
 			speedKmh: this.speed * 3.6,
 			rpm: this.rpm,
 			night: G && G.night ? G.night.value : 0,
+			rain: G && G.weather ? G.weather.value.x : 0,
+			storm: G && G.weather ? G.weather.value.z : 0,
 		} );
 
 	}

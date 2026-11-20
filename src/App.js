@@ -3,8 +3,9 @@ import { GPU } from './engine/gpu/GPU.js';
 import { Texture } from './engine/gpu/Texture.js';
 import { SunShadows } from './engine/render/Shadows.js';
 import { FrameUniforms } from './engine/render/Frame.js';
-import { createPrefsStore, sanitizeVehiclePose } from './core/Prefs.js';
-import { tr } from './i18n/i18n.js';
+import { createPrefsStore, sanitizeVehiclePose, buildSaveBundle, parseSaveBundle } from './core/Prefs.js';
+import { FISH } from './game/FishTable.js';
+import { getLang, tr, trWeather, trFish } from './i18n/i18n.js';
 
 import { Engine } from './core/Engine.js';
 import { Input } from './core/Input.js';
@@ -110,6 +111,7 @@ export class App {
 		this._photoShotBusy = false;
 		this._photoShotTex = null;
 		this._savedFovBeforePhoto = null;
+		this.photoPostcard = true;
 		this._poseSaveT = 0;
 
 	}
@@ -425,6 +427,20 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.buggy.onLand = ( impact ) => this.audio && this.audio.vehicleLand( impact );
 		this.buggy.onShiftPop = ( lvl ) => this.audio && this.audio.vehicleShiftPop( lvl );
 		this.buggy.onSplash = ( str, pos ) => this.audio && this.audio.splash( str, pos );
+		const onStuntLand = ( { airTime, distance, impact } ) => {
+
+			if ( this.player ) this.player.addCameraShake( Math.min( 0.36, 0.14 + impact * 0.22 ) );
+			if ( this.ui ) {
+
+				const d = Math.round( distance );
+				const t = airTime.toFixed( 1 );
+				this.ui.ui.toast( getLang() === 'zh' ? `沙丘飞跃 · 滞空 ${ t } 秒 · ${ d } 米` : `Big air! ${ t }s · ${ d } m`, 2200 );
+
+			}
+
+		};
+		this.motorcycle.onJumpLand = onStuntLand;
+		this.buggy.onJumpLand = onStuntLand;
 		this.vehicleFX = new VehicleFX( { spray: this.spray, vehicles: this.vehicleManager, terrain: this.terrainData } );
 		scene.add( this.vehicleFX.mesh );
 		engine.domElement.addEventListener( 'click', () => {
@@ -1053,8 +1069,22 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 			this.audio.setMasterVolume( p.audioVolume );
 			this.audio.setMuted( p.audioMuted );
+			this.audio.setCategoryVolume?.( 'ambient', p.volAmbient );
+			this.audio.setCategoryVolume?.( 'vehicle', p.volVehicle );
+			this.audio.setCategoryVolume?.( 'fishing', p.volFishing );
+			this.audio.setCategoryVolume?.( 'weather', p.volWeather );
 
 		}
+
+		if ( this.input ) {
+
+			this.input.sensitivity = p.lookSensitivity;
+			this.input.invertY = p.invertY;
+
+		}
+
+		this.photoPostcard = p.photoPostcard;
+		if ( this.ui ) this.ui.ui.setPhotoPostcard( p.photoPostcard );
 
 		if ( this.player ) this.player.camMode = p.camMode;
 		this.camera.fov = p.fov;
@@ -1067,6 +1097,8 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 			vh.topSpeedKmh = vh.id === 'buggy' ? Math.round( p.vehTopSpeed * ( 76 / 84 ) ) : p.vehTopSpeed;
 
 			vh.showRider = p.vehRider;
+			vh.setPaint?.( p.vehPaint );
+			vh.setLightTint?.( p.vehLightTint );
 			if ( p.vehHeadlight ) vh.toggleHeadlight( true );
 			else vh.setHeadlightAuto();
 			const rawPose = vh.id === 'buggy' ? p.buggyPose : p.motorcyclePose;
@@ -1110,6 +1142,38 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		if ( Object.keys( patch ).length ) this.prefs.save( patch, immediate );
 		else if ( immediate ) this.prefs.flush();
+
+	}
+
+	exportSaveJSON() {
+
+		if ( this.prefs ) this.prefs.flush();
+		const bundle = buildSaveBundle( this.game?.state?.toJSON() || null, this.prefs?.data || {} );
+		return JSON.stringify( bundle, null, 2 );
+
+	}
+
+	importSaveJSON( rawText ) {
+
+		const parsed = parseSaveBundle( rawText );
+		if ( ! parsed.ok ) return parsed;
+		if ( parsed.game && this.game?.state ) {
+
+			if ( ! this.game.state.fromJSON( parsed.game ) ) return { ok: false, error: 'Failed to apply game state' };
+			this.game.state.save();
+			this.game.state.emit();
+
+		}
+
+		if ( parsed.prefs && this.prefs ) {
+
+			this.prefs.save( parsed.prefs, true );
+			this.applySavedPrefs();
+
+		}
+
+		if ( this.ui ) this.ui.syncFromApp?.();
+		return { ok: true, hasGame: !! parsed.game, hasPrefs: !! parsed.prefs };
 
 	}
 
@@ -1193,6 +1257,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 			canvas.height = height;
 			const ctx = canvas.getContext( '2d' );
 			ctx.putImageData( new ImageData( rgba, width, height ), 0, 0 );
+			if ( this.photoPostcard ) this._drawPhotoPostcard( ctx, width, height );
 			const blob = await new Promise( ( r ) => canvas.toBlob( r, 'image/png' ) );
 			if ( blob ) {
 
@@ -1228,6 +1293,63 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 			this._photoShotBusy = false;
 
 		}
+
+	}
+
+	_drawPhotoPostcard( ctx, w, h ) {
+
+		const sc = Math.max( 0.85, Math.min( 2.2, w / 1280 ) );
+		const barH = Math.round( 96 * sc );
+		const padX = Math.round( 28 * sc );
+		const padY = Math.round( 20 * sc );
+
+		const grad = ctx.createLinearGradient( 0, h - barH * 1.4, 0, h );
+		grad.addColorStop( 0, 'rgba(5, 13, 18, 0)' );
+		grad.addColorStop( 1, 'rgba(5, 13, 18, 0.72)' );
+		ctx.fillStyle = grad;
+		ctx.fillRect( 0, h - barH * 1.4, w, barH * 1.4 );
+
+		ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
+		ctx.lineWidth = Math.max( 1, Math.round( sc ) );
+		const inset = Math.round( 12 * sc );
+		ctx.strokeRect( inset, inset, w - inset * 2, h - inset * 2 );
+
+		const hrs = ( ( this.settings.timeOfDay % 24 ) + 24 ) % 24;
+		const hh = String( Math.floor( hrs ) ).padStart( 2, '0' );
+		const mm = String( Math.floor( ( hrs - Math.floor( hrs ) ) * 60 ) ).padStart( 2, '0' );
+		const ws = this.weather ? this.weather.getGameplayState() : null;
+		const wLabel = ws ? trWeather( ws.kind, ws.label ) : '';
+		const zh = getLang() === 'zh';
+
+		ctx.save();
+		ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+		ctx.shadowBlur = Math.round( 6 * sc );
+		ctx.fillStyle = '#f2efe6';
+		ctx.font = `600 ${ Math.round( 22 * sc ) }px system-ui, "Segoe UI", sans-serif`;
+		ctx.fillText( zh ? 'TIDEWATER · 潮汐湾' : 'TIDEWATER', padX, h - padY - Math.round( 24 * sc ) );
+
+		const metaParts = [ `${ hh }:${ mm }`, wLabel ];
+		if ( this.player?.mode === 'vehicle' && this.player.activeVehicle ) metaParts.push( tr( this.player.activeVehicle.name ) );
+		else if ( this.player?.mode === 'boat' ) metaParts.push( tr( 'Boat' ) );
+		ctx.fillStyle = 'rgba(242, 239, 230, 0.82)';
+		ctx.font = `500 ${ Math.round( 13 * sc ) }px system-ui, "Segoe UI", sans-serif`;
+		ctx.fillText( metaParts.filter( Boolean ).join( '  ·  ' ), padX, h - padY );
+
+		const lc = this.game?.state?.lastCatch;
+		if ( lc && FISH[ lc.species ] ) {
+
+			const fName = trFish( lc.species, FISH[ lc.species ].name );
+			const catchLine = zh
+				? `最近渔获：${ fName } · ${ lc.kg.toFixed( 2 ) } kg · ${ lc.cm } cm`
+				: `Latest catch: ${ fName } · ${ lc.kg.toFixed( 2 ) } kg · ${ lc.cm } cm`;
+			ctx.textAlign = 'right';
+			ctx.fillStyle = '#84eee2';
+			ctx.font = `600 ${ Math.round( 14 * sc ) }px system-ui, "Segoe UI", sans-serif`;
+			ctx.fillText( catchLine, w - padX, h - padY );
+
+		}
+
+		ctx.restore();
 
 	}
 

@@ -81,6 +81,7 @@ export class Player {
 		this.vehCamInit = false;
 		this.vehFovDelta = 0;
 		this._vehLookHoldT = 0;
+		this._camShake = 0;
 
 		// boat cameras
 		this.orbitYaw = 0;
@@ -870,6 +871,12 @@ export class Player {
 
 	// ------------------------------------------------------------------ land vehicles
 
+	addCameraShake( amount = 0.2 ) {
+
+		this._camShake = Math.min( 0.5, Math.max( this._camShake, Number( amount ) || 0 ) );
+
+	}
+
 	clearVehicleFov() {
 
 		if ( this.vehFovDelta !== 0 ) {
@@ -1014,6 +1021,9 @@ export class Player {
 
 		}
 
+		const shakeY = this._camShake > 0 ? Math.sin( this._camShake * 38 ) * this._camShake * 0.28 : 0;
+		if ( this._camShake > 0 ) this._camShake = Math.max( 0, this._camShake - dt * 1.4 );
+
 		if ( this.camMode === 'first' ) {
 
 			this.vehHeadYaw = THREE.MathUtils.clamp( this.vehHeadYaw - look.x * 0.0022, - 2.1, 2.1 );
@@ -1022,6 +1032,7 @@ export class Player {
 
 			vh.toWorld( vh.seatEyeLocal, _v );
 			this.camera.position.copy( _v );
+			this.camera.position.y += shakeY;
 
 			_qa.setFromAxisAngle( _yAxis, vh.getYaw() + Math.PI );
 			_qb.copy( vh.quaternion ).multiply( _qc.setFromAxisAngle( _yAxis, Math.PI ) );
@@ -1073,6 +1084,7 @@ export class Player {
 
 			this.vehCamPos.lerp( want, 1 - Math.exp( - dt * 11 ) );
 			this.camera.position.copy( this.vehCamPos );
+			this.camera.position.y += shakeY;
 			this.camera.lookAt( target );
 
 		}

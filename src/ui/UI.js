@@ -2008,6 +2008,8 @@ export class UI {
 		this.onPhotoMode = null; // ( on ) photo mode entered / left (P key or setPhotoMode)
 		this.onPhotoCapture = null; // () triggered on F2 or shutter button in photo mode
 		this.onPhotoZoom = null; // ( deltaDeg ) triggered on [ / ] / 0 or zoom buttons in photo mode
+		this.onPhotoPostcardToggle = null; // ( on ) postcard watermark toggled in photo mode
+		this.photoPostcard = true;
 		this.onPanelInteract = null; // ( event ) pointerdown on the settings panel or rail
 		this.onPanelToggle = null; // ( open )
 		this.onHelpToggle = null; // ( open )
@@ -2098,19 +2100,31 @@ export class UI {
 
 		hud.append( tl, this.promptEl, this.boatEl, this.vehicleEl, this.depthEl );
 
-		// photo mode toolbar: zoom, capture (F2), exit (P)
+		// photo mode toolbar: zoom, postcard toggle, capture (F2), exit (P)
 		this.photoHint = h( 'div', 'tw-photo-hint tw-interactive' );
 		this.photoHint.innerHTML = `
 			<button type="button" class="tw-photo-btn" data-zoom="-5" title="[">−</button>
 			<span class="tw-photo-fov">35 mm · 62°</span>
 			<button type="button" class="tw-photo-btn" data-zoom="5" title="]">+</button>
 			<span class="tw-photo-sep"></span>
+			<button type="button" class="tw-photo-btn is-toggle" data-postcard></button>
+			<span class="tw-photo-sep"></span>
 			<button type="button" class="tw-photo-btn is-shutter" data-shot>${ icon( 'camera' ) }<span class="tw-photo-shot-lbl">${ esc( tr( 'Take photo' ) ) } (F2)</span></button>
 			<span class="tw-photo-sep"></span>
 			<kbd>P</kbd><span class="tw-photo-exit-lbl">${ esc( tr( 'Exit photo mode' ) ) }</span>`;
 		this.photoFovEl = this.photoHint.querySelector( '.tw-photo-fov' );
+		this.photoPostcardBtn = this.photoHint.querySelector( '[data-postcard]' );
 		this.photoShotLbl = this.photoHint.querySelector( '.tw-photo-shot-lbl' );
 		this.photoExitLbl = this.photoHint.querySelector( '.tw-photo-exit-lbl' );
+		this.setPhotoPostcard( this.photoPostcard );
+		this.photoPostcardBtn.addEventListener( 'click', ( e ) => {
+
+			e.stopPropagation();
+			this.setPhotoPostcard( ! this.photoPostcard );
+			this._pokePhotoHint();
+			callHook( this.onPhotoPostcardToggle, this.photoPostcard );
+
+		} );
 		this.photoHint.querySelectorAll( '[data-zoom]' ).forEach( ( b ) => {
 
 			b.addEventListener( 'click', ( e ) => {
@@ -3524,6 +3538,18 @@ export class UI {
 
 	}
 
+	setPhotoPostcard( on ) {
+
+		this.photoPostcard = !! on;
+		if ( this.photoPostcardBtn ) {
+
+			this.photoPostcardBtn.classList.toggle( 'is-on', this.photoPostcard );
+			this.photoPostcardBtn.textContent = tr( this.photoPostcard ? 'Postcard: On' : 'Postcard: Off' );
+
+		}
+
+	}
+
 	flashShutter() {
 
 		if ( ! this.shutterEl ) return;
@@ -3572,6 +3598,7 @@ export class UI {
 		if ( this.vLight ) this.vLight.dataset.tip = tr( 'Headlight (L)' );
 		if ( this.photoShotLbl ) this.photoShotLbl.textContent = `${ tr( 'Take photo' ) } (F2)`;
 		if ( this.photoExitLbl ) this.photoExitLbl.textContent = tr( 'Exit photo mode' );
+		this.setPhotoPostcard( this.photoPostcard );
 
 		this._populateHelp();
 		this._populateStart();

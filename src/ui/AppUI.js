@@ -60,17 +60,32 @@ export class AppUI {
 			qualityPreset: app.qualityPreset || 'high',
 			audioVolume: app.audio ? app.audio.volume : ( app.prefs?.data.audioVolume ?? 1 ),
 			audioMuted: app.audio ? app.audio.muted : ( app.prefs?.data.audioMuted ?? false ),
+			volAmbient: app.prefs?.data.volAmbient ?? 1,
+			volVehicle: app.prefs?.data.volVehicle ?? 1,
+			volFishing: app.prefs?.data.volFishing ?? 1,
+			volWeather: app.prefs?.data.volWeather ?? 1,
 			lang: getLang(),
+			lookSensitivity: app.input ? app.input.sensitivity : ( app.prefs?.data.lookSensitivity ?? 1 ),
+			invertY: app.input ? app.input.invertY : ( app.prefs?.data.invertY ?? false ),
 			vehHeadlight: app.motorcycle ? app.motorcycle.headlightActive : false,
 			vehPreset: app.motorcycle ? app.motorcycle.handlingPreset : 'realistic',
 			vehTopSpeed: app.motorcycle ? app.motorcycle.topSpeedKmh : 84,
 			vehRider: app.motorcycle ? app.motorcycle.showRider : true,
+			vehPaint: app.motorcycle ? app.motorcycle.paintId : ( app.prefs?.data.vehPaint ?? 'stock' ),
+			vehLightTint: app.motorcycle ? app.motorcycle.lightTint : ( app.prefs?.data.vehLightTint ?? 'warm' ),
 		};
 
 		ui.onPhotoMode = ( on ) => app.onPhotoModeChange( on );
 		ui.onPhotoCapture = () => app.requestPhotoCapture();
 		ui.onPhotoZoom = ( d ) => app.adjustPhotoFov( d );
+		ui.onPhotoPostcardToggle = ( on ) => {
+
+			app.photoPostcard = on;
+			if ( app.prefs ) app.prefs.save( { photoPostcard: on } );
+
+		};
 		ui.setPhotoFov( app.camera.fov );
+		ui.setPhotoPostcard( app.photoPostcard );
 
 		const spectrum = () => {
 
@@ -332,6 +347,18 @@ export class AppUI {
 			ui.setPhotoFov( v );
 
 		} } );
+		view.addSlider( { label: 'Mouse sensitivity', object: s, key: 'lookSensitivity', min: 0.4, max: 2.2, step: 0.05, format: ( v ) => `${ v.toFixed( 2 ) }×`, onChange: ( v ) => {
+
+			if ( app.input ) app.input.sensitivity = v;
+			if ( app.prefs ) app.prefs.save( { lookSensitivity: v } );
+
+		} } );
+		view.addToggle( { label: 'Invert Y axis', object: s, key: 'invertY', onChange: ( v ) => {
+
+			if ( app.input ) app.input.invertY = v;
+			if ( app.prefs ) app.prefs.save( { invertY: v } );
+
+		} } );
 		view.addButton( { label: 'Free camera (F)', icon: 'camera', onClick: () => app.setFreeCam( ! app.freeCam ) } );
 
 		// ---------------------------------------------------------------- Vehicles
@@ -391,6 +418,29 @@ export class AppUI {
 
 				for ( const vh of vehs ) vh.showRider = v;
 				if ( app.prefs ) app.prefs.save( { vehRider: v } );
+
+			} } );
+			handling.addSelect( { label: 'Paint livery', object: s, key: 'vehPaint', options: [
+				{ label: 'Stock coastal', value: 'stock' },
+				{ label: 'Coral red', value: 'coral' },
+				{ label: 'Coastal teal', value: 'teal' },
+				{ label: 'Dune gold', value: 'sand' },
+				{ label: 'Obsidian black', value: 'obsidian' },
+				{ label: 'Sea pearl', value: 'pearl' },
+			], onChange: ( v ) => {
+
+				for ( const vh of vehs ) vh.setPaint?.( v );
+				if ( app.prefs ) app.prefs.save( { vehPaint: v } );
+
+			} } );
+			handling.addSelect( { label: 'Headlight tint', object: s, key: 'vehLightTint', options: [
+				{ label: 'Warm halogen', value: 'warm' },
+				{ label: 'Ice white LED', value: 'led' },
+				{ label: 'Amber fog', value: 'amber' },
+			], onChange: ( v ) => {
+
+				for ( const vh of vehs ) vh.setLightTint?.( v );
+				if ( app.prefs ) app.prefs.save( { vehLightTint: v } );
 
 			} } );
 
@@ -519,6 +569,22 @@ export class AppUI {
 			if ( app.prefs ) app.prefs.save( { audioVolume: v } );
 
 		} } );
+		for ( const [ cat, key, label ] of [
+			[ 'ambient', 'volAmbient', 'Ambient & sea' ],
+			[ 'vehicle', 'volVehicle', 'Vehicles & boat' ],
+			[ 'fishing', 'volFishing', 'Fishing & UI' ],
+			[ 'weather', 'volWeather', 'Rain & thunder' ],
+		] ) {
+
+			audioFolder.addSlider( { label, object: s, key, min: 0, max: 1, step: 0.02, format: ( v ) => `${ Math.round( v * 100 ) }%`, onChange: ( v ) => {
+
+				if ( app.audio ) app.audio.setCategoryVolume?.( cat, v );
+				if ( app.prefs ) app.prefs.save( { [ key ]: v } );
+
+			} } );
+
+		}
+
 		audioFolder.addToggle( { label: 'Mute (M)', object: s, key: 'audioMuted', onChange: ( v ) => {
 
 			if ( app.audio ) app.audio.setMuted( v );
@@ -526,28 +592,26 @@ export class AppUI {
 
 		} } );
 
-		const general = perf.addFolder( 'General', { icon: 'sliders' } );
-		general.addSelect( {
-			label: 'Language', object: s, key: 'lang',
-			tooltip: 'Switch UI language between Simplified Chinese and English.',
-			options: [ { label: 'Simplified Chinese', value: 'zh' }, { label: 'English', value: 'en' } ],
-			onChange: ( v ) => setLang( v ),
-		} );
-		onLangChange( ( l ) => { s.lang = l; ui.refresh(); } );
-		general.addButton( { label: 'Reset defaults', icon: 'reset', variant: 'ghost', onClick: () => {
+		const syncStateFields = () => {
 
-			if ( app.prefs ) app.prefs.reset();
-			app.applySavedPrefs();
-			s.audioVolume = app.audio ? app.audio.volume : 1;
-			s.audioMuted = app.audio ? app.audio.muted : false;
+			s.audioVolume = app.audio ? app.audio.volume : ( app.prefs?.data.audioVolume ?? 1 );
+			s.audioMuted = app.audio ? app.audio.muted : ( app.prefs?.data.audioMuted ?? false );
+			s.volAmbient = app.prefs?.data.volAmbient ?? 1;
+			s.volVehicle = app.prefs?.data.volVehicle ?? 1;
+			s.volFishing = app.prefs?.data.volFishing ?? 1;
+			s.volWeather = app.prefs?.data.volWeather ?? 1;
 			s.camMode = app.player ? app.player.camMode : 'third';
 			s.fov = app.camera.fov;
+			s.lookSensitivity = app.input ? app.input.sensitivity : 1;
+			s.invertY = app.input ? app.input.invertY : false;
 			if ( app.motorcycle ) {
 
 				s.vehPreset = app.motorcycle.handlingPreset;
 				s.vehTopSpeed = app.motorcycle.topSpeedKmh;
 				s.vehRider = app.motorcycle.showRider;
 				s.vehHeadlight = app.motorcycle.headlightActive;
+				s.vehPaint = app.motorcycle.paintId;
+				s.vehLightTint = app.motorcycle.lightTint;
 
 			}
 
@@ -558,12 +622,75 @@ export class AppUI {
 
 			}
 
+			ui.setPhotoFov( app.camera.fov );
+			ui.setPhotoPostcard( app.photoPostcard );
 			syncQualityControls();
+
+		};
+		this._syncFromApp = syncStateFields;
+
+		const general = perf.addFolder( 'General', { icon: 'sliders' } );
+		general.addSelect( {
+			label: 'Language', object: s, key: 'lang',
+			tooltip: 'Switch UI language between Simplified Chinese and English.',
+			options: [ { label: 'Simplified Chinese', value: 'zh' }, { label: 'English', value: 'en' } ],
+			onChange: ( v ) => setLang( v ),
+		} );
+		onLangChange( ( l ) => { s.lang = l; ui.refresh(); } );
+		general.addButton( { label: 'Export save', icon: 'download', onClick: () => {
+
+			const json = app.exportSaveJSON();
+			const blob = new Blob( [ json ], { type: 'application/json' } );
+			const d = new Date();
+			const pad = ( n ) => String( n ).padStart( 2, '0' );
+			const fname = `tidewater-save-${ d.getFullYear() }${ pad( d.getMonth() + 1 ) }${ pad( d.getDate() ) }.json`;
+			const url = URL.createObjectURL( blob );
+			const a = document.createElement( 'a' );
+			a.href = url;
+			a.download = fname;
+			document.body.append( a );
+			a.click();
+			a.remove();
+			setTimeout( () => URL.revokeObjectURL( url ), 1000 );
+			ui.toast( tr( 'Save exported' ) );
+
+		} } );
+		general.addButton( { label: 'Import save', icon: 'upload', onClick: () => {
+
+			const inp = document.createElement( 'input' );
+			inp.type = 'file';
+			inp.accept = '.json,application/json';
+			inp.onchange = () => {
+
+				const f = inp.files && inp.files[ 0 ];
+				if ( ! f ) return;
+				f.text().then( ( txt ) => {
+
+					const res = app.importSaveJSON( txt );
+					ui.toast( tr( res.ok ? 'Save imported' : 'Invalid save file' ) );
+
+				} ).catch( () => ui.toast( tr( 'Invalid save file' ) ) );
+
+			};
+			inp.click();
+
+		} } );
+		general.addButton( { label: 'Reset defaults', icon: 'reset', variant: 'ghost', onClick: () => {
+
+			if ( app.prefs ) app.prefs.reset();
+			app.applySavedPrefs();
+			syncStateFields();
 			ui.toast( tr( 'Settings reset to defaults' ) );
 
 		} } );
 
 		this._t = 0;
+
+	}
+
+	syncFromApp() {
+
+		if ( this._syncFromApp ) this._syncFromApp();
 
 	}
 

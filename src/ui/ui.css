@@ -1366,6 +1366,12 @@ body {
 	background: rgba(170, 215, 235, 0.24);
 }
 
+.tw-photo-btn.is-toggle.is-on {
+	background: rgba(92, 224, 210, 0.22);
+	color: #84eee2;
+	border: 1px solid rgba(92, 224, 210, 0.45);
+}
+
 .tw-photo-btn.is-shutter {
 	background: var(--tw-aqua);
 	color: #061c1a;
