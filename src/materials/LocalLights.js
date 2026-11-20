@@ -190,9 +190,11 @@ export class LocalLights {
 
 		}
 
-		// lamps: on from dusk (same ramp as the lantern glass), nearest first
+		// lamps: on from dusk (same ramp as the lantern glass), nearest first;
+		// alwaysOn sources (e.g. vehicle headlight/brake light) work by day/storm and sort by priority.
 		const on = smooth( G.night.value, 0.15, 0.75 ) * this.strength;
-		if ( on > 0.002 && this.enabled ) {
+		const nightRamp = smooth( G.night.value, 0.0, 0.65 );
+		if ( this.enabled ) {
 
 			const cp = camera.position;
 			const list = this._list;
@@ -200,13 +202,15 @@ export class LocalLights {
 			for ( const s of this.sources ) {
 
 				if ( s.enabled === false ) continue;
+				if ( ! s.alwaysOn && on <= 0.002 ) continue;
 				if ( s.update ) s.update();
+				if ( s.scale === 0 ) continue;
 				s.d2 = s.position.distanceToSquared( cp );
 				list.push( s );
 
 			}
 
-			list.sort( ( a, b ) => a.d2 - b.d2 );
+			list.sort( ( a, b ) => ( b.priority || 0 ) - ( a.priority || 0 ) || ( a.d2 - b.d2 ) );
 			const slots = MAX - n;
 			// fade out the farthest selected lights as they approach the cut (no popping)
 			const dCut = list.length > slots ? Math.sqrt( list[ slots ].d2 ) : Infinity;
@@ -215,7 +219,10 @@ export class LocalLights {
 				const s = list[ i ];
 				const fade = Number.isFinite( dCut ) ? smooth( Math.sqrt( s.d2 ), dCut, dCut * 0.8 ) : 1;
 				const fl2 = s.flicker ? 1 + s.flicker * Math.sin( this.time * 9 + s.phase ) * Math.sin( this.time * 5.3 + s.phase * 0.37 ) : 1;
-				const k = s.intensity * on * fade * fl2 * ( s.scale ?? 1 );
+				const env = s.alwaysOn
+					? this.strength * ( ( s.dayScale ?? 0.35 ) + ( 1 - ( s.dayScale ?? 0.35 ) ) * nightRamp )
+					: on;
+				const k = s.intensity * env * fade * fl2 * ( s.scale ?? 1 );
 				if ( k <= 1e-4 ) continue;
 				const r = s.range;
 				pos[ n ].set( s.position.x, s.position.y, s.position.z, r * r );
@@ -318,5 +325,75 @@ export function addVillageLights( lights, village ) {
 		lights.add( src );
 
 	}
+
+}
+
+// Motorcycle / land-vehicle lights: bright forward beam following steering head + rear/brake glow.
+export function addVehicleLights( lights, vehicle ) {
+
+	if ( ! lights || ! vehicle || ! vehicle.model ) return [];
+	const model = vehicle.model;
+	const headObj = model.steerPivot || model.group;
+	const tailObj = model.chassisGroup || model.group;
+	const localHeadPos = ( model.headlightLocal || new THREE.Vector3( 0, - 0.08, 0.23 ) ).clone();
+	// In steerPivot frame (raked -0.40), +0.46 rotates +Z slightly down toward road ahead; custom vehicles can override headlightDirLocal
+	const localHeadDir = ( model.headlightDirLocal || new THREE.Vector3( 0, - Math.sin( 0.46 ), Math.cos( 0.46 ) ) ).clone().normalize();
+	const localTailPos = ( model.taillightLocal || new THREE.Vector3( 0, 0.72, - 1.02 ) ).clone();
+	const localTailDir = new THREE.Vector3( 0, - 0.18, - 0.98 ).normalize();
+
+	const baseIntensity = 16.0;
+	const baseRange = 42;
+	const head = {
+		position: new THREE.Vector3(),
+		color: new THREE.Color( 1.0, 0.93, 0.78 ),
+		intensity: baseIntensity,
+		range: baseRange,
+		kind: 'vehicleHeadlight',
+		alwaysOn: true,
+		priority: 2,
+		dayScale: 0.16,
+		dir: new THREE.Vector3(),
+		cosInner: 0.92,
+		cosOuter: 0.68,
+		scale: 0,
+		update() {
+
+			headObj.updateWorldMatrix( true, false );
+			this.position.copy( localHeadPos ).applyMatrix4( headObj.matrixWorld );
+			this.dir.copy( localHeadDir ).transformDirection( headObj.matrixWorld ).normalize();
+			const u = vehicle.upgrades;
+			this.intensity = baseIntensity * ( u ? u.lightMul : 1 );
+			this.range = baseRange * ( u ? u.lightRangeMul : 1 );
+			this.scale = vehicle.headlightActive ? 1 : 0;
+
+		},
+	};
+
+	const tail = {
+		position: new THREE.Vector3(),
+		color: new THREE.Color( 1.0, 0.08, 0.05 ),
+		intensity: 2.6,
+		range: 7.5,
+		kind: 'vehicleTaillight',
+		alwaysOn: true,
+		priority: 1,
+		dayScale: 0.42,
+		dir: new THREE.Vector3(),
+		cosInner: 0.25,
+		cosOuter: - 0.25,
+		scale: 0,
+		update() {
+
+			tailObj.updateWorldMatrix( true, false );
+			this.position.copy( localTailPos ).applyMatrix4( tailObj.matrixWorld );
+			this.dir.copy( localTailDir ).transformDirection( tailObj.matrixWorld ).normalize();
+			this.scale = vehicle.brakeLight ? 1.0 : ( vehicle.headlightActive ? 0.24 : 0 );
+
+		},
+	};
+
+	head.update();
+	tail.update();
+	return [ lights.add( head ), lights.add( tail ) ];
 
 }

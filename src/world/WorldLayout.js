@@ -31,6 +31,17 @@ export const WORLD = {
 	// where the player starts: on the boardwalk up from the pier foot, looking down it toward the pier
 	start: { position: new THREE.Vector3( 53.6, 0, - 77 ), yaw: Math.PI },
 
+	vehicleSpawns: {
+		motorcycle: { position: new THREE.Vector3( 48.5, 0, - 80.5 ), heading: - Math.PI * 0.82 },
+		buggy: { position: new THREE.Vector3( 64.5, 0, - 84.0 ), heading: 0.95 },
+	},
+
+	lighthouse: {
+		position: new THREE.Vector3( 296, 0, 122 ),
+		padRadius: 11,
+		towerHeight: 19.5,
+	},
+
 	// Incoming swell direction (unit, travel direction)
 	swellDir: new THREE.Vector2( - 0.12, - 1 ).normalize(),
 };

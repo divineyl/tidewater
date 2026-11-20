@@ -1,6 +1,7 @@
 import { FISH, fishLengthCm } from './FishTable.js';
 import { UPGRADES, nextLevel, FUEL_PRICE } from './Gear.js';
 import { FishPortrait } from './FishPortrait.js';
+import { getLang, onLangChange, tr, trFish, trUpgradeName, trUpgradeLabel } from '../i18n/i18n.js';
 
 // DOM for the fishing game, in the look of the rest of the HUD (ui/ui.css tokens, .tw-glass):
 //   top right     purse and cooler / hold load
@@ -73,6 +74,8 @@ const CSS = /* css */`
 .gm-fuel.is-low .gm-fuel-bar > span { background: var(--tw-coral); }
 .gm-sonar-dots { letter-spacing: 1px; color: var(--tw-aqua); }
 .gm-shop-row { display: grid; grid-template-columns: 1fr auto; gap: var(--tw-3); align-items: center; padding: var(--tw-2) 0; border-bottom: 1px solid var(--tw-line); }
+.gm-shop-sec { margin-top: var(--tw-3); padding: var(--tw-1) 0; font-size: var(--tw-fs-xs); font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--tw-aqua); border-bottom: 1px solid rgba(var(--tw-aqua-rgb), 0.3); }
+.gm-shop-sec:first-child { margin-top: 0; }
 .gm-shop-row small { display: block; color: var(--tw-ink-3); font-size: var(--tw-fs-sm); margin-top: 2px; }
 .gm-shop-row .gm-have { color: var(--tw-ink-3); font-size: var(--tw-fs-sm); }
 .gm-log { margin-top: var(--tw-3); color: var(--tw-ink-3); font-size: var(--tw-fs-sm); line-height: 1.5; }
@@ -172,11 +175,13 @@ export class GameHUD {
 		style.textContent = CSS;
 		document.head.append( style );
 
-		this.purse = h( 'div', 'gm-purse tw-glass', `<span class="gm-money">$0</span><span class="gm-cooler"><span class="gm-cooler-label">Cooler</span><span class="gm-cooler-bar"><span></span></span><span class="gm-cooler-kg">0 / 30 kg</span></span><span class="gm-gauge gm-fuel"><span>Fuel</span><span class="gm-cooler-bar gm-fuel-bar"><span></span></span><b class="gm-fuel-l">40 L</b></span><span class="gm-gauge gm-sonar"><span>Sonar</span><b class="gm-sonar-d">0 m</b><span class="gm-sonar-dots"></span></span>` );
+		this.purse = h( 'div', 'gm-purse tw-glass', `<span class="gm-money">$0</span><span class="gm-cooler"><span class="gm-cooler-label">Cooler</span><span class="gm-cooler-bar"><span></span></span><span class="gm-cooler-kg">0 / 30 kg</span></span><span class="gm-gauge gm-fuel"><span class="gm-fuel-label">Fuel</span><span class="gm-cooler-bar gm-fuel-bar"><span></span></span><b class="gm-fuel-l">40 L</b></span><span class="gm-gauge gm-sonar"><span class="gm-sonar-label">Sonar</span><b class="gm-sonar-d">0 m</b><span class="gm-sonar-dots"></span></span>` );
 		this.fuelEl = this.purse.querySelector( '.gm-fuel' );
+		this.fuelLabel = this.purse.querySelector( '.gm-fuel-label' );
 		this.fuelBar = this.purse.querySelector( '.gm-fuel-bar > span' );
 		this.fuelL = this.purse.querySelector( '.gm-fuel-l' );
 		this.sonarEl = this.purse.querySelector( '.gm-sonar' );
+		this.sonarLabel = this.purse.querySelector( '.gm-sonar-label' );
 		this.sonarD = this.purse.querySelector( '.gm-sonar-d' );
 		this.sonarDots = this.purse.querySelector( '.gm-sonar-dots' );
 		this.moneyEl = this.purse.querySelector( '.gm-money' );
@@ -188,12 +193,13 @@ export class GameHUD {
 		this.fight = h( 'div', 'gm-fight tw-glass', `
 			<div class="gm-fight-head"><span class="gm-fight-call">Fish on!</span><span class="gm-fight-dist">0 m</span></div>
 			<div class="gm-tension"><span class="gm-band"></span><span class="gm-danger"></span><span class="gm-needle"></span></div>
-			<div class="gm-stamina"><span>Fish</span><span class="gm-stamina-bar"><span></span></span></div>` );
+			<div class="gm-stamina"><span class="gm-stamina-label">Fish</span><span class="gm-stamina-bar"><span></span></span></div>` );
 		this.fCall = this.fight.querySelector( '.gm-fight-call' );
 		this.fDist = this.fight.querySelector( '.gm-fight-dist' );
 		this.fBand = this.fight.querySelector( '.gm-band' );
 		this.fNeedle = this.fight.querySelector( '.gm-needle' );
 		this.fStam = this.fight.querySelector( '.gm-stamina-bar > span' );
+		this.fStamLabel = this.fight.querySelector( '.gm-stamina-label' );
 
 		this.bite = h( 'div', 'gm-bite', '!' );
 		this.cast = h( 'div', 'gm-cast', '<span></span>' );
@@ -213,6 +219,7 @@ export class GameHUD {
 		this.standOpen = false;
 		this._last = {};
 		game.state.onChange( () => this.refresh() );
+		this._unsubLang = onLangChange( () => this.refresh() );
 		this.refresh();
 
 	}
@@ -229,7 +236,10 @@ export class GameHUD {
 		const st = s.stats;
 		this.moneyEl.textContent = `$${ s.money.toLocaleString() }`;
 		const kg = s.holdKg;
-		this.coolerLabel.textContent = s.upgrades.hold > 0 ? 'Hold' : 'Cooler';
+		this.coolerLabel.textContent = tr( s.upgrades.hold > 0 ? 'Hold' : 'Cooler' );
+		if ( this.fuelLabel ) this.fuelLabel.textContent = tr( 'Fuel' );
+		if ( this.sonarLabel ) this.sonarLabel.textContent = tr( 'Sonar' );
+		if ( this.fStamLabel ) this.fStamLabel.textContent = tr( 'Fish' );
 		this.coolerKg.textContent = `${ kg.toFixed( 1 ) } / ${ st.holdKg } kg`;
 		this.coolerBar.style.width = `${ Math.min( 100, kg / st.holdKg * 100 ) }%`;
 		this.coolerEl.classList.toggle( 'is-full', kg > st.holdKg * 0.9 );
@@ -285,7 +295,7 @@ export class GameHUD {
 			else if ( fight.surge > 0.55 ) { call = 'It\'s running!'; cls = 'is-warn'; }
 			else if ( fight.tension < 0.15 ) { call = 'Slack line!'; cls = 'is-warn'; }
 			else if ( fight.tension >= fight.band[ 0 ] && fight.tension <= fight.band[ 1 ] ) { call = 'Good pressure'; cls = 'is-good'; }
-			this.fCall.textContent = call;
+			this.fCall.textContent = tr( call );
 			this.fCall.className = 'gm-fight-call ' + cls;
 
 		}
@@ -301,15 +311,34 @@ export class GameHUD {
 	// info: GameState.lastCatch ({ species, kg, cm, value, newSpecies, record, prevBestKg, prevBestCm, kept })
 	showCatch( info, ms = 9000 ) {
 
+		const zh = getLang() === 'zh';
 		const f = FISH[ info.species ];
+		const fishName = trFish( info.species, f.name );
 		const inch = info.cm / 2.54, lb = info.kg * 2.20462;
-		const badge = info.record ? '<span class="gm-badge is-record">★ New record</span>'
-			: info.newSpecies ? '<span class="gm-badge is-new">New species</span>' : '<span class="gm-badge is-plain">Catch</span>';
+		const badge = info.record ? `<span class="gm-badge is-record">${ tr( '★ New record' ) }</span>`
+			: info.newSpecies ? `<span class="gm-badge is-new">${ tr( 'New species' ) }</span>` : `<span class="gm-badge is-plain">${ tr( 'Catch' ) }</span>`;
 		let note;
-		if ( ! info.kept ) note = `<div class="gm-catch-note is-warn">No room in the ${ this.game.state.upgrades.hold > 0 ? 'hold' : 'cooler' } · you let it go</div>`;
-		else if ( info.record ) note = `<div class="gm-catch-note">Previous best <b>${ info.prevBestKg.toFixed( 2 ) } kg</b> · ${ info.prevBestCm } cm. Beaten by ${ ( info.kg - info.prevBestKg ).toFixed( 2 ) } kg.</div>`;
-		else if ( info.newSpecies ) note = '<div class="gm-catch-note">First one in your fish log.</div>';
-		else note = `<div class="gm-catch-note">Your best: ${ info.prevBestKg.toFixed( 2 ) } kg · ${ info.prevBestCm } cm</div>`;
+		if ( ! info.kept ) {
+
+			note = zh
+				? `<div class="gm-catch-note is-warn">${ this.game.state.upgrades.hold > 0 ? '鱼舱' : '冰桶' }空间不足 · 你把它放回了海里</div>`
+				: `<div class="gm-catch-note is-warn">No room in the ${ this.game.state.upgrades.hold > 0 ? 'hold' : 'cooler' } · you let it go</div>`;
+
+		} else if ( info.record ) {
+
+			note = zh
+				? `<div class="gm-catch-note">此前纪录 <b>${ info.prevBestKg.toFixed( 2 ) } kg</b> · ${ info.prevBestCm } cm，本次打破纪录 +${ ( info.kg - info.prevBestKg ).toFixed( 2 ) } kg！</div>`
+				: `<div class="gm-catch-note">Previous best <b>${ info.prevBestKg.toFixed( 2 ) } kg</b> · ${ info.prevBestCm } cm. Beaten by ${ ( info.kg - info.prevBestKg ).toFixed( 2 ) } kg.</div>`;
+
+		} else if ( info.newSpecies ) note = `<div class="gm-catch-note">${ tr( 'First one in your fish log.' ) }</div>`;
+		else {
+
+			note = zh
+				? `<div class="gm-catch-note">历史最佳：${ info.prevBestKg.toFixed( 2 ) } kg · ${ info.prevBestCm } cm</div>`
+				: `<div class="gm-catch-note">Your best: ${ info.prevBestKg.toFixed( 2 ) } kg · ${ info.prevBestCm } cm</div>`;
+
+		}
+
 		// splash burst around the fish as it lands in view
 		let drops = '';
 		for ( let i = 0; i < 26; i ++ ) {
@@ -324,18 +353,18 @@ export class GameHUD {
 		c.innerHTML = `
 			<div class="gm-catch-top">
 				<div class="gm-catch-eyebrow">${ badge }</div>
-				<h2>${ f.name }</h2>
+				<h2>${ fishName }</h2>
 				<div class="gm-catch-sci">${ f.sci || '' }</div>
 			</div>
 			<div class="gm-catch-stage"><canvas></canvas><div class="gm-splash">${ drops }</div></div>
 			<div class="gm-catch-bottom">
 				<div class="gm-catch-stats">
-					<div class="gm-stat"><span>Length</span><b>${ info.cm }<small>cm</small></b><i>${ inch.toFixed( 1 ) } in</i></div>
-					<div class="gm-stat"><span>Weight</span><b>${ info.kg < 1 ? info.kg.toFixed( 2 ) : info.kg.toFixed( 1 ) }<small>kg</small></b><i>${ lb.toFixed( 1 ) } lb</i></div>
-					<div class="gm-stat is-value"><span>Value</span><b>$${ info.value }</b><i>${ info.kept ? 'in the cooler' : 'let go' }</i></div>
+					<div class="gm-stat"><span>${ tr( 'Length' ) }</span><b>${ info.cm }<small>cm</small></b><i>${ inch.toFixed( 1 ) } in</i></div>
+					<div class="gm-stat"><span>${ tr( 'Weight' ) }</span><b>${ info.kg < 1 ? info.kg.toFixed( 2 ) : info.kg.toFixed( 1 ) }<small>kg</small></b><i>${ lb.toFixed( 1 ) } lb</i></div>
+					<div class="gm-stat is-value"><span>${ tr( 'Value' ) }</span><b>$${ info.value }</b><i>${ tr( info.kept ? 'in the cooler' : 'let go' ) }</i></div>
 				</div>
 				${ note }
-				<div class="gm-catch-foot"><kbd>Click</kbd> or <kbd>E</kbd> to continue<span class="gm-catch-timer"><span></span></span></div>
+				<div class="gm-catch-foot"><kbd>${ tr( 'Click' ) }</kbd> ${ zh ? '或按' : 'or' } <kbd>E</kbd> ${ zh ? '继续' : 'to continue' }<span class="gm-catch-timer"><span></span></span></div>
 			</div>`;
 		// restart the entrance even when a card is already up
 		c.classList.remove( 'is-on' );
@@ -373,6 +402,7 @@ export class GameHUD {
 		if ( this.invOpen ) {
 
 			this.closeStand();
+			if ( this.game.minimap ) this.game.minimap.toggleFull( false );
 			this.renderInventory();
 			releaseMouse();
 
@@ -385,14 +415,17 @@ export class GameHUD {
 	renderInventory() {
 
 		const s = this.game.state;
-		const rows = s.inventory.map( ( f ) => `<div class="gm-row has-cm"><span>${ FISH[ f.species ].name }${ f.record ? '<small>record</small>' : '' }</span><span class="gm-cm">${ f.cm ?? Math.round( fishLengthCm( f.species, f.kg ) ) } cm</span><span class="gm-kg">${ f.kg.toFixed( 2 ) } kg</span><span class="gm-val">$${ f.value }</span><button class="gm-mini" data-release="${ f.id }">Release</button></div>` ).join( '' );
-		const logged = Object.entries( s.log ).filter( ( [ k ] ) => FISH[ k ] ).map( ( [ k, v ] ) => `${ FISH[ k ].name }: ${ v.count } caught, best ${ v.bestKg.toFixed( 2 ) } kg · ${ v.bestCm ?? Math.round( fishLengthCm( k, v.bestKg ) ) } cm` ).join( '<br>' );
+		const zh = getLang() === 'zh';
+		const rows = s.inventory.map( ( f ) => `<div class="gm-row has-cm"><span>${ trFish( f.species, FISH[ f.species ].name ) }${ f.record ? `<small>${ tr( 'record' ) }</small>` : '' }</span><span class="gm-cm">${ f.cm ?? Math.round( fishLengthCm( f.species, f.kg ) ) } cm</span><span class="gm-kg">${ f.kg.toFixed( 2 ) } kg</span><span class="gm-val">$${ f.value }</span><button class="gm-mini" data-release="${ f.id }">${ tr( 'Release' ) }</button></div>` ).join( '' );
+		const logged = Object.entries( s.log ).filter( ( [ k ] ) => FISH[ k ] ).map( ( [ k, v ] ) => zh
+			? `${ trFish( k, FISH[ k ].name ) }：累计 ${ v.count } 条，最大 ${ v.bestKg.toFixed( 2 ) } kg · ${ v.bestCm ?? Math.round( fishLengthCm( k, v.bestKg ) ) } cm`
+			: `${ FISH[ k ].name }: ${ v.count } caught, best ${ v.bestKg.toFixed( 2 ) } kg · ${ v.bestCm ?? Math.round( fishLengthCm( k, v.bestKg ) ) } cm` ).join( '<br>' );
 		this.inv.innerHTML = `
-			<h2>${ s.upgrades.hold > 0 ? 'Fish hold' : 'Cooler' }</h2>
-			<p class="gm-sub">${ s.inventory.length } fish · ${ s.holdKg.toFixed( 1 ) } of ${ s.stats.holdKg } kg · worth $${ s.holdValue }</p>
-			<div class="gm-list">${ rows || '<div class="gm-empty">Nothing yet. Cast from the pier, the beach or the boat.</div>' }</div>
-			${ logged ? `<div class="gm-log"><b>Fish log</b><br>${ logged }</div>` : '' }
-			<div class="gm-foot"><span class="gm-sub">Sell at the fish stand by the pier</span><button class="gm-btn is-ghost" data-close>Close (I)</button></div>`;
+			<h2>${ tr( s.upgrades.hold > 0 ? 'Fish hold' : 'Cooler' ) }</h2>
+			<p class="gm-sub">${ zh ? `${ s.inventory.length } 条鱼 · ${ s.holdKg.toFixed( 1 ) } / ${ s.stats.holdKg } kg · 估值 $${ s.holdValue }` : `${ s.inventory.length } fish · ${ s.holdKg.toFixed( 1 ) } of ${ s.stats.holdKg } kg · worth $${ s.holdValue }` }</p>
+			<div class="gm-list">${ rows || `<div class="gm-empty">${ tr( 'Nothing yet. Cast from the pier, the beach or the boat.' ) }</div>` }</div>
+			${ logged ? `<div class="gm-log"><b>${ tr( 'Fish log' ) }</b><br>${ logged }</div>` : '' }
+			<div class="gm-foot"><span class="gm-sub">${ tr( 'Sell at the fish stand by the pier' ) }</span><button class="gm-btn is-ghost" data-close>${ tr( 'Close (I)' ) }</button></div>`;
 		this.inv.querySelector( '[data-close]' ).onclick = () => this.toggleInventory( false );
 		for ( const b of this.inv.querySelectorAll( '[data-release]' ) ) b.onclick = () => s.release( Number( b.dataset.release ) );
 
@@ -404,6 +437,7 @@ export class GameHUD {
 		this.standOpen = true;
 		this.vendor = vendor;
 		this.toggleInventory( false );
+		if ( this.game.minimap ) this.game.minimap.toggleFull( false );
 		if ( vendor.kind === 'shop' ) this.renderShop();
 		else this.renderStand();
 		this.stand.classList.add( 'is-open' );
@@ -422,12 +456,13 @@ export class GameHUD {
 
 		const s = this.game.state;
 		const v = this.vendor || { name: 'Fish buyer' };
-		const rows = s.inventory.map( ( f ) => `<div class="gm-row has-cm"><span>${ FISH[ f.species ].name }</span><span class="gm-cm">${ f.cm ?? Math.round( fishLengthCm( f.species, f.kg ) ) } cm</span><span class="gm-kg">${ f.kg.toFixed( 2 ) } kg</span><span class="gm-val">$${ f.value }</span><button class="gm-mini" data-sell="${ f.id }">Sell</button></div>` ).join( '' );
+		const zh = getLang() === 'zh';
+		const rows = s.inventory.map( ( f ) => `<div class="gm-row has-cm"><span>${ trFish( f.species, FISH[ f.species ].name ) }</span><span class="gm-cm">${ f.cm ?? Math.round( fishLengthCm( f.species, f.kg ) ) } cm</span><span class="gm-kg">${ f.kg.toFixed( 2 ) } kg</span><span class="gm-val">$${ f.value }</span><button class="gm-mini" data-sell="${ f.id }">${ tr( 'Sell' ) }</button></div>` ).join( '' );
 		this.stand.innerHTML = `
-			<h2>${ v.name }</h2>
-			<p class="gm-sub">${ s.inventory.length ? v.greeting || 'Let\'s see what you caught.' : v.idle || 'Come back when you\'ve got fish.' }</p>
-			<div class="gm-list">${ rows || '<div class="gm-empty">Your cooler is empty.</div>' }</div>
-			<div class="gm-foot"><button class="gm-btn is-ghost" data-close>Leave (E)</button><button class="gm-btn" data-all ${ s.inventory.length ? '' : 'disabled' }>Sell all · $${ s.holdValue }</button></div>`;
+			<h2>${ tr( v.name ) }</h2>
+			<p class="gm-sub">${ s.inventory.length ? tr( v.greeting || 'Let\'s see what you caught.' ) : tr( v.idle || 'Come back when you\'ve got fish.' ) }</p>
+			<div class="gm-list">${ rows || `<div class="gm-empty">${ tr( 'Your cooler is empty.' ) }</div>` }</div>
+			<div class="gm-foot"><button class="gm-btn is-ghost" data-close>${ tr( 'Leave (E)' ) }</button><button class="gm-btn" data-all ${ s.inventory.length ? '' : 'disabled' }>${ zh ? '全部出售' : 'Sell all' } · $${ s.holdValue }</button></div>`;
 		this.stand.querySelector( '[data-close]' ).onclick = () => this.closeStand();
 		this.stand.querySelector( '[data-all]' ).onclick = () => this.game.sellAll();
 		for ( const b of this.stand.querySelectorAll( '[data-sell]' ) ) b.onclick = () => this.game.sell( [ Number( b.dataset.sell ) ] );
@@ -440,23 +475,39 @@ GameHUD.prototype.renderShop = function () {
 
 	const s = this.game.state;
 	const v = this.vendor;
-	const rows = Object.entries( UPGRADES ).map( ( [ key, track ] ) => {
+	const zh = getLang() === 'zh';
+	const renderRow = ( key ) => {
 
-		const cur = track.levels[ s.upgrades[ key ] | 0 ];
+		const track = UPGRADES[ key ];
+		if ( ! track ) return '';
+		const idx = s.upgrades[ key ] | 0;
+		const cur = track.levels[ idx ];
 		const next = nextLevel( s.upgrades, key );
+		const curLabel = trUpgradeLabel( key, idx, cur.label );
+		const nextLabel = next ? trUpgradeLabel( key, next.index, next.label ) : curLabel;
 		const btn = next
 			? `<button class="gm-btn" data-buy="${ key }" ${ next.cost > s.money ? 'disabled' : '' }>$${ next.cost }</button>`
-			: '<span class="gm-have">Top of the line</span>';
-		return `<div class="gm-shop-row"><span>${ track.name }: ${ next ? next.label : cur.label }<small>Now: ${ cur.label }</small></span>${ btn }</div>`;
+			: `<span class="gm-have">${ tr( 'Top of the line' ) }</span>`;
+		return `<div class="gm-shop-row"><span>${ trUpgradeName( key, track.name ) }：${ next ? nextLabel : curLabel }<small>${ zh ? '当前' : 'Now' }：${ curLabel }</small></span>${ btn }</div>`;
 
-	} ).join( '' );
+	};
+
 	const missing = s.stats.fuelL - s.fuelL;
-	const fuelRow = `<div class="gm-shop-row"><span>Diesel · $${ FUEL_PRICE.toFixed( 2 ) } / L<small>Tank: ${ s.fuelL.toFixed( 0 ) } of ${ s.stats.fuelL } L</small></span>${ missing > 0.5 ? `<button class="gm-btn" data-fuel ${ s.money < FUEL_PRICE ? 'disabled' : '' }>Fill · $${ s.refuelCost() }</button>` : '<span class="gm-have">Full</span>' }</div>`;
+	const fuelRow = `<div class="gm-shop-row"><span>${ zh ? '船用柴油' : 'Diesel' } · $${ FUEL_PRICE.toFixed( 2 ) } / L<small>${ zh ? '油箱存量' : 'Tank' }：${ s.fuelL.toFixed( 0 ) } / ${ s.stats.fuelL } L</small></span>${ missing > 0.5 ? `<button class="gm-btn" data-fuel ${ s.money < FUEL_PRICE ? 'disabled' : '' }>${ zh ? '加满' : 'Fill' } · $${ s.refuelCost() }</button>` : `<span class="gm-have">${ tr( 'Full' ) }</span>` }</div>`;
+	const sec = ( key ) => `<div class="gm-shop-sec">${ tr( key ) }</div>`;
+	const content = [
+		sec( 'Fishing gear' ),
+		renderRow( 'line' ), renderRow( 'reel' ), renderRow( 'rod' ),
+		sec( 'Boat upgrades' ),
+		fuelRow, renderRow( 'hold' ), renderRow( 'fuel' ), renderRow( 'engine' ), renderRow( 'fishFinder' ), renderRow( 'lights' ),
+		sec( 'Land vehicle garage' ),
+		renderRow( 'vehTires' ), renderRow( 'vehEngine' ), renderRow( 'vehSuspension' ), renderRow( 'vehLights' ),
+	].join( '' );
 	this.stand.innerHTML = `
-		<h2>${ v.name }</h2>
-		<p class="gm-sub">${ v.greeting } · You have $${ s.money.toLocaleString() }</p>
-		<div class="gm-list">${ fuelRow }${ rows }</div>
-		<div class="gm-foot"><span class="gm-sub">Upgrades take effect at once</span><button class="gm-btn is-ghost" data-close>Leave (E)</button></div>`;
+		<h2>${ tr( v.name ) }</h2>
+		<p class="gm-sub">${ tr( v.greeting ) } · ${ zh ? `持有金币 $${ s.money.toLocaleString() }` : `You have $${ s.money.toLocaleString() }` }</p>
+		<div class="gm-list">${ content }</div>
+		<div class="gm-foot"><span class="gm-sub">${ tr( 'Upgrades take effect at once' ) }</span><button class="gm-btn is-ghost" data-close>${ tr( 'Leave (E)' ) }</button></div>`;
 	this.stand.querySelector( '[data-close]' ).onclick = () => this.closeStand();
 	for ( const b of this.stand.querySelectorAll( '[data-buy]' ) ) b.onclick = () => this.game.buy( b.dataset.buy );
 	const f = this.stand.querySelector( '[data-fuel]' );

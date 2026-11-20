@@ -159,9 +159,15 @@ export class SoundScape {
 		this.env = {
 			lx: 0, ly: 1.7, lz: 0, fx: 0, fy: 0, fz: - 1, ux: 0, uy: 1, uz: 0,
 			u: 0, depth: 0, surf: 0.5, shoreDist: 60, onLand: true, wind: 7, day: 1, nearPier: false, hour: null,
+			rain: 0, storm: 0, sheltered: false,
 			shoreX: 0, shoreZ: 1,
 			boat: { active: false, rpm: 0, speed: 0, x: 0, y: 0, z: 0, inside: false },
+			vehicle: { kind: 'motorcycle', active: false, occupied: false, rpm: 0, throttle: 0, speed: 0, surface: 'sand', drift: 0, x: 0, y: 0, z: 0, inside: false },
 		};
+		this._vehNodes = null;
+		this._vehActive = 0;
+		this._rainNodes = null;
+		this._noiseBuf = null;
 		const sw = WORLD.swellDir || { x: - 0.12, y: - 1 };
 		const l = Math.hypot( sw.x, sw.y ) || 1;
 		this._swell = { x: sw.x / l, z: sw.y / l }; // travel direction of the swell = towards the beach
@@ -276,6 +282,7 @@ export class SoundScape {
 			this._birds( now, step );
 			this._whale( now, step );
 			this._reel( now );
+			this._vehicle( now, step );
 
 		} catch ( e ) {
 
@@ -442,6 +449,55 @@ export class SoundScape {
 
 	waveBreak() {}
 
+	// procedural distance-attenuated thunder clap + roll, HRTF-placed at the lightning strike
+	thunder( x, y, z, distanceMeters, strength = 1 ) {
+
+		if ( ! this.enabled || ! this._noiseBuf || ! this._panner ) return;
+		const c = this.ctx;
+		const now = c.currentTime;
+		const d = Math.max( 60, num( distanceMeters, 600 ) );
+		const str = clamp( num( strength, 1 ), 0.3, 1.5 );
+
+		const pan = this._panner( this.above, 260, 0.45 );
+		pan.positionX.value = x;
+		pan.positionY.value = y;
+		pan.positionZ.value = z;
+
+		const lp = c.createBiquadFilter();
+		lp.type = 'lowpass';
+		const fStart = clamp( 1100 / ( 1 + d / 420 ), 190, 1100 );
+		lp.frequency.setValueAtTime( fStart, now );
+		lp.frequency.exponentialRampToValueAtTime( 95, now + 2.6 + str );
+		lp.Q.value = 0.7;
+		lp.connect( pan );
+
+		const src = c.createBufferSource();
+		src.buffer = this._noiseBuf;
+		src.loop = true;
+		src.playbackRate.value = 0.38 + Math.random() * 0.22;
+
+		const env = c.createGain();
+		const amp = 0.55 * str * clamp( 900 / ( d + 350 ), 0.12, 1.1 );
+		env.gain.setValueAtTime( 0.0001, now );
+		env.gain.linearRampToValueAtTime( amp * ( d < 1100 ? 1.0 : 0.65 ), now + 0.05 );
+		env.gain.setTargetAtTime( amp * 0.35, now + 0.14, 0.28 );
+		env.gain.setTargetAtTime( 0.0001, now + 1.1, 0.85 );
+
+		src.connect( env ).connect( lp );
+		const dur = 3.2 + str * 1.4;
+		src.start( now, Math.random() * 2.5 );
+		src.stop( now + dur );
+		src.onended = () => {
+
+			src.disconnect();
+			env.disconnect();
+			lp.disconnect();
+			pan.disconnect();
+
+		};
+
+	}
+
 	dispose() {
 
 		if ( ! this.ctx ) return;
@@ -526,8 +582,64 @@ export class SoundScape {
 		this.boatSum = gain( 1, this.boatOut );
 		this.boatSum.connect( this.boatIn );
 		this.engineLP = lowpass( 1200, 0.6, this.boatSum );
+		// vehicle: positional when standing beside it, stereo centered when riding
+		this.vehPan = panner( this.above, 4, 1.1 );
+		this.vehOut = gain( 1, this.vehPan );
+		this.vehIn = gain( 0, this.above );
+		this.vehSum = gain( 1, this.vehOut );
+		this.vehSum.connect( this.vehIn );
+		this.vehEngLP = lowpass( 650, 1.4, this.vehSum );
+		this.vehEngGain = gain( 0, this.vehEngLP );
+		this.vehTireBP = c.createBiquadFilter();
+		this.vehTireBP.type = 'bandpass';
+		this.vehTireBP.frequency.value = 950;
+		this.vehTireBP.Q.value = 0.7;
+		this.vehTireGain = gain( 0, this.vehSum );
+		this.vehTireBP.connect( this.vehTireGain );
+
 		this.pierPan = panner( this.above, 3, 1.3 );
 		this.windLP = lowpass( 1400, 0.5, this.above );
+
+		// procedural stereo noise buffer (3s seamless) for rain & thunder synthesis
+		const sr = c.sampleRate, len = sr * 3;
+		const buf = c.createBuffer( 2, len, sr );
+		for ( let ch = 0; ch < 2; ch ++ ) {
+
+			const d = buf.getChannelData( ch );
+			let b0 = 0, b1 = 0, b2 = 0;
+			for ( let pass = 0; pass < 2; pass ++ ) {
+
+				for ( let i = 0; i < len; i ++ ) {
+
+					const w = pass === 0 ? Math.random() * 2 - 1 : d[ i ];
+					b0 = 0.997 * b0 + w * 0.05;
+					b1 = 0.985 * b1 + w * 0.09;
+					b2 = 0.94 * b2 + w * 0.16;
+					d[ i ] = clamp( ( b0 + b1 + b2 + w * 0.25 ) * 0.45, - 1, 1 );
+
+				}
+
+			}
+
+		}
+
+		this._noiseBuf = buf;
+
+		// procedural rain bed (fine hiss + patter body -> shelter LP -> above)
+		this.rainOut = gain( 0, this.above );
+		this.rainLP = lowpass( 10500, 0.55, this.rainOut );
+		this.rainFine = c.createBiquadFilter();
+		this.rainFine.type = 'bandpass';
+		this.rainFine.frequency.value = 3400;
+		this.rainFine.Q.value = 0.65;
+		this.rainFineGain = gain( 0.45, this.rainLP );
+		this.rainFine.connect( this.rainFineGain );
+		this.rainBody = c.createBiquadFilter();
+		this.rainBody.type = 'bandpass';
+		this.rainBody.frequency.value = 880;
+		this.rainBody.Q.value = 0.55;
+		this.rainBodyGain = gain( 0.75, this.rainLP );
+		this.rainBody.connect( this.rainBodyGain );
 
 		// the rod and reel: held in front of you, a little to the right (the reel hangs lower right)
 		this.rodPan = c.createStereoPanner ? c.createStereoPanner() : null;
@@ -972,6 +1084,9 @@ export class SoundScape {
 		e.day = clamp( num( s.daylight, 1 ), 0, 1 );
 		e.nearPier = !! s.nearPier;
 		e.hour = typeof s.timeOfDay === 'number' && Number.isFinite( s.timeOfDay ) ? ( ( s.timeOfDay % 24 ) + 24 ) % 24 : null;
+		e.rain = clamp( num( s.rainIntensity, 0 ), 0, 1 );
+		e.storm = clamp( num( s.stormIntensity, 0 ), 0, 1 );
+		e.sheltered = !! s.sheltered || !! ( s.boat && s.boat.listenerInside );
 		const b = s.boat || EMPTY, bp = b.position || EMPTY, eb = e.boat;
 		eb.active = !! b.active;
 		eb.rpm = clamp( num( b.rpm, 0 ), 0, 1 );
@@ -980,6 +1095,19 @@ export class SoundScape {
 		eb.y = num( bp.y, eb.y );
 		eb.z = num( bp.z, eb.z );
 		eb.inside = !! b.listenerInside;
+		const vh = s.vehicle || EMPTY, vp = vh.position || EMPTY, ev = e.vehicle;
+		ev.kind = typeof vh.kind === 'string' ? vh.kind : 'motorcycle';
+		ev.active = !! vh.active;
+		ev.occupied = !! vh.occupied;
+		ev.rpm = clamp( num( vh.rpm, 0 ), 0, 1 );
+		ev.throttle = clamp( num( vh.throttle, 0 ), 0, 1 );
+		ev.speed = Math.abs( num( vh.speed, 0 ) );
+		ev.surface = typeof vh.surface === 'string' ? vh.surface : 'sand';
+		ev.drift = clamp( num( vh.drift, 0 ), 0, 1 );
+		ev.x = num( vp.x, ev.x );
+		ev.y = num( vp.y, ev.y );
+		ev.z = num( vp.z, ev.z );
+		ev.inside = !! vh.listenerInside;
 		e.onLand = typeof s.coastDistance === 'number' && Number.isFinite( s.coastDistance ) ? s.coastDistance < 0 : true;
 		if ( e.u > 0.01 || eb.active ) e.onLand = false;
 
@@ -1017,6 +1145,9 @@ export class SoundScape {
 		this._pos( this.boatPan, e.boat.x, e.boat.y + 0.3, e.boat.z );
 		this._ramp( this.boatIn.gain, e.boat.inside ? 1 : 0, 0.1 );
 		this._ramp( this.boatOut.gain, e.boat.inside ? 0 : 1, 0.1 );
+		this._pos( this.vehPan, e.vehicle.x, e.vehicle.y + 0.5, e.vehicle.z );
+		this._ramp( this.vehIn.gain, e.vehicle.occupied ? 0.72 : 0, 0.12 );
+		this._ramp( this.vehOut.gain, e.vehicle.occupied ? 0.28 : 1, 0.12 );
 		const pier = WORLD.pier;
 		this._pos( this.pierPan, pier.x, 0, clamp( e.lz, Math.max( pier.zStart, - 40 ), pier.zEnd ) );
 
@@ -1058,16 +1189,40 @@ export class SoundScape {
 		}
 
 		g.v += ( g.target - g.v ) * ( 1 - Math.exp( - dt / 1.4 ) );
-		const w = Math.hypot( e.wind, eb.active ? eb.speed * 0.9 : 0 );
-		const gw = eb.active && eb.speed > 3 ? Math.max( g.v, 0.5 ) : g.v; // apparent wind on a running boat is steady
+		const w = Math.hypot( e.wind, Math.max( eb.active ? eb.speed * 0.9 : 0, e.vehicle.occupied ? e.vehicle.speed * 0.75 : 0 ) );
+		const gw = ( eb.active && eb.speed > 3 ) || ( e.vehicle.occupied && e.vehicle.speed > 5 ) ? Math.max( g.v, 0.5 ) : Math.max( g.v, e.storm * 0.45 ); // apparent wind on a running craft / storm floor
 		this._bed( 'wind', dB( MIX.wind ) * clamp( w / 7, 0, 2.5 ) * gw / dB( BANK.wind.lufs ), now, 0.3 );
 		this._ramp( this.windLP.frequency, 400 + ( 80 + 60 * gw ) * w, 0.4 );
 
-		// trees inland rustle in the gusts; crickets inland at night (daylight < 0.3)
+		// procedural rain bed (lazy-started when rain becomes audible)
+		if ( e.rain > 0.01 && ! this._rainNodes && this._noiseBuf ) {
+
+			const src = this.ctx.createBufferSource();
+			src.buffer = this._noiseBuf;
+			src.loop = true;
+			src.connect( this.rainFine );
+			src.connect( this.rainBody );
+			src.start( now + 0.02 );
+			this._rainNodes = src;
+
+		}
+
+		if ( this.rainOut ) {
+
+			const rLvl = Math.pow( e.rain, 0.85 ) * 0.38;
+			this._ramp( this.rainOut.gain, rLvl, 0.35 );
+			this._ramp( this.rainLP.frequency, e.sheltered ? 1350 : 10500, 0.25 );
+			this._ramp( this.rainFineGain.gain, e.sheltered ? 0.16 : 0.45 + 0.2 * e.rain, 0.3 );
+			this._ramp( this.rainBodyGain.gain, e.sheltered ? 0.55 : 0.55 + 0.45 * e.rain, 0.3 );
+
+		}
+
+		// trees inland rustle in the gusts; crickets inland at night (suppressed by rain)
 		const veg = e.onLand ? smooth( 6, 30, d ) : 0;
 		this._bed( 'palms', dB( MIX.palms ) * veg * clamp( e.wind / 7, 0.2, 1.8 ) * g.v * ( 0.3 + 0.7 * e.day ) / dB( BANK.palms.lufs ), now, 0.5 );
 		const night = smooth( 0.3, 0.12, e.day );
-		this._bed( 'crickets', dB( MIX.crickets ) * night * ( e.onLand ? 0.35 + 0.65 * smooth( 5, 40, d ) : 0.1 ) / dB( BANK.crickets.lufs ), now, 1 );
+		const cricketRain = 1 - smooth( 0.08, 0.45, e.rain );
+		this._bed( 'crickets', dB( MIX.crickets ) * night * cricketRain * ( e.onLand ? 0.35 + 0.65 * smooth( 5, 40, d ) : 0.1 ) / dB( BANK.crickets.lufs ), now, 1 );
 
 		// water lapping the pier piles
 		this._bed( 'pier_lap', ( e.nearPier ? dB( MIX.pierLap ) : 0 ) / dB( BANK.pier_lap.lufs ), now, 0.6 );
@@ -1105,8 +1260,10 @@ export class SoundScape {
 
 		const e = this.env;
 		if ( e.day < 0.35 || e.u > 0.5 ) return;
+		const weatherCalm = Math.max( 0.08, 1 - smooth( 0.12, 0.65, e.rain ) * 0.85 - smooth( 0.3, 0.9, e.storm ) * 0.15 );
+		if ( weatherCalm < 0.12 ) return;
 		const flock = this._flock();
-		this._gullT -= dt;
+		this._gullT -= dt * weatherCalm;
 		if ( this._gullT <= 0 ) {
 
 			if ( flock ) {
@@ -1129,7 +1286,7 @@ export class SoundScape {
 
 		}
 
-		this._ternT -= dt;
+		this._ternT -= dt * weatherCalm;
 		if ( this._ternT <= 0 ) {
 
 			const a = flock ? this._pickBird( flock, 'tern', 190 ) : null;
@@ -1247,15 +1404,16 @@ export class SoundScape {
 	_birds( now, dt ) {
 
 		const e = this.env, { act, chorus, lull } = this._birdActivity();
+		const weatherCalm = Math.max( 0.05, 1 - smooth( 0.12, 0.65, e.rain ) * 0.85 - smooth( 0.3, 0.9, e.storm ) * 0.15 );
 		const inland = e.onLand ? smooth( 0, 45, e.shoreDist ) : 0;
 		const hab = e.onLand ? 0.25 + 0.75 * inland : 0.25 * ( 1 - smooth( 20, 90, e.shoreDist ) );
 
 		// the dawn chorus: many birds at once, diffuse; inland at full, from the beach distant, gone at sea
-		const cg = chorus * ( e.onLand ? 0.3 + 0.7 * inland : 0.3 * ( 1 - smooth( 20, 150, e.shoreDist ) ) ) * ( 1 - e.u );
+		const cg = chorus * weatherCalm * ( e.onLand ? 0.3 + 0.7 * inland : 0.3 * ( 1 - smooth( 20, 150, e.shoreDist ) ) ) * ( 1 - e.u );
 		this._bed( 'birds_dawn', dB( MIX.birdChorus ) * cg / dB( BANK.birds_dawn.lufs ), now, 2 );
 
 		this._birdT -= dt;
-		const rate = act * hab;
+		const rate = act * hab * weatherCalm;
 		if ( this._birdT <= 0 ) {
 
 			this._birdT = rate > 0.02 ? ( 4 + Math.random() * 20 ) / rate : 3;
@@ -1376,6 +1534,173 @@ export class SoundScape {
 		s.fluke = fl;
 		s.breaches = num( b.breaches, 0 );
 		s.splashes = num( b.splashes, 0 );
+
+	}
+
+	// ------------------------------------------------------------------ procedural motorcycle audio
+
+	_ensureVehicleNodes( now ) {
+
+		if ( this._vehNodes || ! this.ctx ) return this._vehNodes;
+		const c = this.ctx;
+
+		const shaper = c.createWaveShaper();
+		const curve = new Float32Array( 256 );
+		for ( let i = 0; i < 256; i ++ ) {
+
+			const x = ( i * 2 ) / 255 - 1;
+			curve[ i ] = Math.tanh( x * 2.6 ) * 0.72;
+
+		}
+
+		shaper.curve = curve;
+		shaper.connect( this.vehEngGain );
+
+		const oscA = c.createOscillator();
+		oscA.type = 'sawtooth';
+		oscA.frequency.value = 34;
+		const gA = c.createGain();
+		gA.gain.value = 0.55;
+		oscA.connect( gA );
+		gA.connect( shaper );
+
+		const oscB = c.createOscillator();
+		oscB.type = 'triangle';
+		oscB.frequency.value = 17; // thumper sub-harmonic
+		const gB = c.createGain();
+		gB.gain.value = 0.75;
+		oscB.connect( gB );
+		gB.connect( shaper );
+
+		oscA.start( now + 0.01 );
+		oscB.start( now + 0.01 );
+
+		let tireSrc = null;
+		if ( this._noiseBuf ) {
+
+			tireSrc = c.createBufferSource();
+			tireSrc.buffer = this._noiseBuf;
+			tireSrc.loop = true;
+			tireSrc.connect( this.vehTireBP );
+			tireSrc.start( now + 0.01 );
+
+		}
+
+		this._vehNodes = { oscA, oscB, tireSrc };
+		return this._vehNodes;
+
+	}
+
+	_vehicle( now, dt ) {
+
+		const ev = this.env.vehicle;
+		if ( ! this.vehEngGain ) return;
+
+		const wantOn = ev.active ? 1 : 0;
+		this._vehActive += ( wantOn - this._vehActive ) * ( 1 - Math.exp( - dt * ( wantOn ? 8 : 3.5 ) ) );
+
+		if ( ev.active && ! this._vehNodes ) this._ensureVehicleNodes( now );
+		if ( ! this._vehNodes ) return;
+
+		const n = this._vehNodes;
+		const rpm = ev.rpm;
+		const thr = ev.throttle;
+
+		// Single/twin thumper for motorcycle vs deeper 4-cylinder thrum for buggy
+		const isBuggy = ev.kind === 'buggy';
+		const f = isBuggy
+			? ( 21 + 76 * Math.pow( rpm, 1.15 ) )
+			: ( 26 + 98 * Math.pow( rpm, 1.12 ) );
+		this._ramp( n.oscA.frequency, f, 0.045 );
+		this._ramp( n.oscB.frequency, f * ( isBuggy ? 0.75 : 0.5 ), 0.045 );
+		this._ramp( this.vehEngLP.frequency, 280 + 1650 * rpm + 900 * thr, 0.06 );
+		const engVol = this._vehActive * ( 0.055 + 0.095 * rpm + 0.05 * thr );
+		this._ramp( this.vehEngGain.gain, engVol, 0.06 );
+
+		// Surface tire hiss / gravel / drift
+		const sp = ev.speed;
+		const surfFreq = ev.surface === 'water' ? 2300 : ev.surface === 'sand' ? 920 : ev.surface === 'wood' ? 460 : 1280;
+		this._ramp( this.vehTireBP.frequency, surfFreq + sp * 28, 0.08 );
+		const tireVol = sp > 0.6 && this.env.u < 0.5
+			? clamp( ( sp / 18 ) * 0.08 + ev.drift * 0.14 + ( ev.surface === 'sand' ? 0.035 : 0 ), 0, 0.24 ) * ( ev.occupied ? 1 : 0.4 )
+			: 0;
+		this._ramp( this.vehTireGain.gain, tireVol, 0.08 );
+
+	}
+
+	vehicleHorn( kind = 'motorcycle' ) {
+
+		if ( ! this.enabled || this._muted || ! this.ctx || ! this.above ) return;
+		const c = this.ctx;
+		const now = c.currentTime;
+		const g = c.createGain();
+		g.gain.setValueAtTime( 0.0001, now );
+		g.gain.linearRampToValueAtTime( 0.11, now + 0.02 );
+		g.gain.setValueAtTime( 0.11, now + 0.18 );
+		g.gain.exponentialRampToValueAtTime( 0.0001, now + 0.25 );
+		g.connect( this.above );
+
+		const freqs = kind === 'buggy' ? [ 330, 415 ] : [ 415, 523 ];
+		for ( const freq of freqs ) {
+
+			const o = c.createOscillator();
+			o.type = 'sawtooth';
+			o.frequency.value = freq;
+			const lp = c.createBiquadFilter();
+			lp.type = 'lowpass';
+			lp.frequency.value = 1800;
+			o.connect( lp );
+			lp.connect( g );
+			o.start( now );
+			o.stop( now + 0.26 );
+
+		}
+
+	}
+
+	vehicleShiftPop( level = 0.8 ) {
+
+		if ( ! this.enabled || this._muted || ! this.ctx || ! this.vehSum ) return;
+		const c = this.ctx;
+		const now = c.currentTime;
+		const g = c.createGain();
+		g.gain.setValueAtTime( 0.07 * clamp( level, 0.2, 1.2 ), now );
+		g.gain.exponentialRampToValueAtTime( 0.0001, now + 0.085 );
+		const bp = c.createBiquadFilter();
+		bp.type = 'bandpass';
+		bp.frequency.value = 240;
+		bp.Q.value = 1.4;
+		bp.connect( g );
+		g.connect( this.vehSum );
+
+		if ( this._noiseBuf ) {
+
+			const src = c.createBufferSource();
+			src.buffer = this._noiseBuf;
+			src.connect( bp );
+			src.start( now );
+			src.stop( now + 0.09 );
+
+		}
+
+	}
+
+	vehicleLand( impact = 0.5 ) {
+
+		if ( ! this.enabled || this._muted || ! this.ctx || ! this.vehSum ) return;
+		const c = this.ctx;
+		const now = c.currentTime;
+		const o = c.createOscillator();
+		o.type = 'sine';
+		o.frequency.setValueAtTime( 110, now );
+		o.frequency.exponentialRampToValueAtTime( 38, now + 0.14 );
+		const g = c.createGain();
+		g.gain.setValueAtTime( 0.16 * clamp( impact, 0.15, 1.0 ), now );
+		g.gain.exponentialRampToValueAtTime( 0.0001, now + 0.15 );
+		o.connect( g );
+		g.connect( this.vehSum );
+		o.start( now );
+		o.stop( now + 0.16 );
 
 	}
 

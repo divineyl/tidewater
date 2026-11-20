@@ -35,9 +35,50 @@ export function activity( pref, hour ) {
 
 }
 
+function weatherSpeciesMul( id, weather ) {
+
+	if ( ! weather ) return 1;
+	const rain = Math.min( 1, Math.max( 0, weather.rainIntensity || 0 ) );
+	const storm = Math.min( 1, Math.max( 0, weather.stormIntensity || 0 ) );
+	const lowPres = Math.min( 1, Math.max( 0, ( 1015 - ( weather.pressure ?? 1015 ) ) / 20 ) );
+	if ( id === 'tuna' || id === 'mahi' || id === 'barracuda' || id === 'tarpon' ) {
+
+		return 1 + 0.25 * rain + 0.45 * storm + 0.22 * lowPres;
+
+	}
+
+	if ( id === 'jack' || id === 'grouper' || id === 'redSnapper' ) {
+
+		return 1 + 0.12 * rain + 0.12 * lowPres;
+
+	}
+
+	if ( id === 'silverside' || id === 'parrot' || id === 'tang' ) {
+
+		return Math.max( 0.45, 1 - 0.28 * storm - 0.15 * rain );
+
+	}
+
+	return 1;
+
+}
+
+function weatherDelayMul( habitat, weather ) {
+
+	if ( ! weather ) return 1;
+	const rain = Math.min( 1, Math.max( 0, weather.rainIntensity || 0 ) );
+	const storm = Math.min( 1, Math.max( 0, weather.stormIntensity || 0 ) );
+	const pres = weather.pressure ?? 1015;
+	const lowPres = Math.min( 1, Math.max( - 0.3, ( 1016 - pres ) / 18 ) );
+	const feedBoost = 1 - 0.14 * Math.max( 0, lowPres ) - 0.18 * Math.sin( Math.min( 1, rain ) * Math.PI * 0.75 );
+	const shallowPenalty = habitat && habitat.shallows > 0.5 ? 0.18 * storm : 0;
+	return Math.max( 0.65, feedBoost + shallowPenalty );
+
+}
+
 // Weighted pick of the species that bites here; null when nothing lives here.
 // rng: () => [0, 1)
-export function pickSpecies( habitat, hour, rng = Math.random ) {
+export function pickSpecies( habitat, hour, rng = Math.random, weather = null ) {
 
 	let total = 0;
 	const w = [];
@@ -46,7 +87,7 @@ export function pickSpecies( habitat, hour, rng = Math.random ) {
 		const f = FISH[ id ];
 		let hw = 0;
 		for ( const k in f.habitat ) hw += f.habitat[ k ] * habitat[ k ];
-		const x = hw * f.rarity * activity( f.time, hour );
+		const x = hw * f.rarity * activity( f.time, hour ) * weatherSpeciesMul( id, weather );
 		w.push( x );
 		total += x;
 
@@ -75,7 +116,7 @@ export function rollWeight( id, rng = Math.random ) {
 }
 
 // Seconds until the next bite at this spot: richer water bites sooner. Infinity when barren.
-export function biteDelay( habitat, hour, rng = Math.random ) {
+export function biteDelay( habitat, hour, rng = Math.random, weather = null ) {
 
 	let rich = 0;
 	for ( const k in habitat ) rich += habitat[ k ];
@@ -83,7 +124,7 @@ export function biteDelay( habitat, hour, rng = Math.random ) {
 	// open water between the named habitats still has fish: never much slower than a poor spot
 	rich = Math.max( rich, 0.35 );
 	const light = hour > 6 && hour < 19 ? 1 : 0.8;
-	const mean = 8 / ( Math.min( rich, 1.6 ) * light );
+	const mean = ( 8 / ( Math.min( rich, 1.6 ) * light ) ) * weatherDelayMul( habitat, weather );
 	return 2 + - Math.log( 1 - rng() * 0.98 ) * mean * 0.6;
 
 }

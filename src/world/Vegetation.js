@@ -93,7 +93,7 @@ const CANOPY_FAR = [ 2600, 2800 ];
 
 export class Vegetation {
 
-	constructor( { scene, terrain, village = null } ) {
+	constructor( { scene, terrain, village = null, groundInteraction = null } ) {
 
 		this.scene = scene;
 		this.terrain = terrain;
@@ -211,7 +211,7 @@ export class Vegetation {
 		// renderer handle; the atlas bakes with its own MeshRenderer)
 		this.renderer = true;
 
-		this.grass = new GrassField( { terrain, mask: grassMask } );
+		this.grass = new GrassField( { terrain, mask: grassMask, groundInteraction } );
 		for ( const m of this.grass.meshes ) this.group.add( m );
 
 		this.geometryTriangles = {

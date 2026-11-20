@@ -83,16 +83,18 @@ fn scHG( mu: f32, g: f32 ) -> f32 {
 	let d = max( 1.0 + g * g - 2.0 * g * mu, 0.001 );
 	return ( 1.0 - g * g ) / ( 4.0 * PI * d * sqrt( d ) );
 }
-// normalized droplet phase: 80% forward / 20% backscatter; each higher order halves the asymmetry
+// dual-lobe droplet phase: strong forward silver lining + broad forward + soft backscatter
 fn scPhases( mu: f32 ) -> vec3f {
-	return vec3f( scHG( mu, 0.8 ), scHG( mu, 0.4 ), scHG( mu, 0.2 ) ) * 0.8
-		+ vec3f( scHG( mu, -0.2 ), scHG( mu, -0.1 ), scHG( mu, -0.05 ) ) * 0.2;
+	let fwd = vec3f( scHG( mu, 0.84 ), scHG( mu, 0.45 ), scHG( mu, 0.22 ) );
+	let mid = vec3f( scHG( mu, 0.48 ), scHG( mu, 0.24 ), scHG( mu, 0.10 ) );
+	let back = vec3f( scHG( mu, -0.22 ), scHG( mu, -0.10 ), scHG( mu, -0.04 ) );
+	return fwd * 0.62 + mid * 0.22 + back * 0.16;
 }
 
 // ---- density (sky-pro density.wgsl)
 struct ScCandidate {
 	conservative: f32, edge: f32, top: f32, floorMask: f32,
-	shellHeight: f32, localHeight: f32, coverage: f32, position: vec3f,
+	shellHeight: f32, localHeight: f32, coverage: f32, rainCore: f32, position: vec3f,
 };
 fn scShellHeight( p: vec3f ) -> f32 {
 	let horizontal = p.xz - scf.position.xz;
@@ -109,21 +111,31 @@ fn scCandidate( p: vec3f, coverage: f32, lod: f32 ) -> ScCandidate {
 	let windDirection = scs.wind.xy;
 	let shapePosition = p - vec3f( scf.wind.x, 0.0, scf.wind.y )
 		- vec3f( windDirection.x, 0.0, windDirection.y ) * ( scs.wind.z * max( h, 0.0 ) - scf.wind.z );
-	let weather = textureSampleLevel( scWeatherMap, smpLinearRepeat, ( p.xz - scf.wind.xy ) / scs.shape.x, 0.0 ).r;
-	let edge = max( scs.base.y * exp2( -max( h, 0.0 ) * scs.base.z ), 0.0001 );
+	let wSample = textureSampleLevel( scWeatherMap, smpLinearRepeat, ( p.xz - scf.wind.xy ) / scs.shape.x, 0.0 );
+	let weather = wSample.r;
+	let localType = wSample.g;
+	let rainCore = wSample.b;
+	// anvil spread near cloud tops for tall convective clouds
+	let anvilMask = smoothstep( 0.62, 0.92, h ) * smoothstep( 0.55, 0.9, localType ) * scs.wind.w;
+	let effectiveWeather = min( 1.0, weather + anvilMask * 0.28 );
+	let heightCap = mix( 0.46, 1.0, smoothstep( 0.0, 0.9, localType ) );
+	let baseEdge = max( scs.base.y * exp2( -max( h, 0.0 ) * scs.base.z ), 0.0001 );
+	let edge = mix( baseEdge * 1.45, baseEdge, smoothstep( 0.15, 0.55, localType ) );
 	// an all-one noise sample bounds top dilation; a failed bound avoids the volume fetch
-	let maximumTop = weather + coverage - 1.0 + 1.34 * scs.shape.z * coverage;
+	let maximumTopRaw = effectiveWeather + coverage - 1.0 + 1.34 * scs.shape.z * coverage;
+	let maximumTop = select( maximumTopRaw, maximumTopRaw * heightCap, maximumTopRaw > 0.0 );
 	if ( maximumTop < h - edge ) { return result; }
 	let required = ( 1.0 - smoothstep( scs.base.w, max( scs.erosion.w, scs.base.w + 0.001 ), h ) ) * scs.base.x;
-	let floorMask = smoothstep( required - 0.1, required, weather );
+	let floorMask = smoothstep( required - 0.1, required, effectiveWeather );
 	if ( floorMask <= 0.0 ) { return result; }
 	let baseSample = textureSampleLevel( scNoise, smpLinearRepeat, shapePosition / scs.shape.y, lod ).rgb;
 	let dilation = dot( baseSample, vec3f( 0.7, 0.41, 0.23 ) ) * scs.shape.z;
-	let top = weather + coverage - 1.0 + dilation * coverage;
+	let topRaw = effectiveWeather + coverage - 1.0 + dilation * coverage;
+	let top = select( topRaw, topRaw * heightCap, topRaw > 0.0 );
 	result.conservative = smoothstep( -edge, edge, top - h ) * smoothstep( -edge, edge, h ) * floorMask;
 	result.edge = edge; result.top = top; result.floorMask = floorMask;
 	result.shellHeight = h; result.localHeight = clamp( h / max( top, 0.001 ), 0.0, 1.0 );
-	result.coverage = coverage; result.position = shapePosition;
+	result.coverage = coverage; result.rainCore = rainCore; result.position = shapePosition;
 	return result;
 }
 fn scErodedDensity( c: ScCandidate, lod: f32 ) -> f32 {
@@ -177,16 +189,21 @@ fn scHeightAlongRay( t: f32, dir: vec3f, originHeight: f32 ) -> f32 {
 	let altitude = originHeight + dir.y * t + dot( dir.xz, dir.xz ) * t * t / ( 2.0 * SC_EARTH * 1000.0 );
 	return ( altitude - scs.shell.x ) / scs.shell.y;
 }
-fn scCellIsEmpty( t: f32, end: f32, dir: vec3f, originHeight: f32, maximumWeather: f32 ) -> bool {
+fn scCellIsEmpty( t: f32, end: f32, dir: vec3f, originHeight: f32, bounds: vec2f ) -> bool {
+	let maximumWeather = bounds.x;
+	let maxType = bounds.y;
 	let turningPoint = -dir.y * SC_EARTH * 1000.0 / max( dot( dir.xz, dir.xz ), 0.000001 );
 	let minHeight = scHeightAlongRay( clamp( turningPoint, t, end ), dir, originHeight );
 	let maxHeight = max( scHeightAlongRay( t, dir, originHeight ), scHeightAlongRay( end, dir, originHeight ) );
 	let coverage = scCoverageAt( end );
-	let maximumTop = maximumWeather + coverage - 1.0 + 1.34 * scs.shape.z * coverage;
+	let maxWeatherAnvil = min( 1.0, maximumWeather + scs.wind.w * 0.28 * smoothstep( 0.55, 0.9, maxType ) );
+	let maxHeightCap = mix( 0.46, 1.0, smoothstep( 0.0, 0.9, maxType ) );
+	let maximumTopRaw = maxWeatherAnvil + coverage - 1.0 + 1.34 * scs.shape.z * coverage;
+	let maximumTop = select( maximumTopRaw, maximumTopRaw * maxHeightCap, maximumTopRaw > 0.0 );
 	let edgeHeight = select( maxHeight, minHeight, scs.base.z >= 0.0 );
-	let edge = max( scs.base.y * exp2( -max( edgeHeight, 0.0 ) * scs.base.z ), 0.0001 );
+	let edge = max( scs.base.y * exp2( -max( edgeHeight, 0.0 ) * scs.base.z ), 0.0001 ) * 1.45;
 	let required = ( 1.0 - smoothstep( scs.base.w, max( scs.erosion.w, scs.base.w + 0.001 ), maxHeight ) ) * scs.base.x;
-	return maximumTop < minHeight - edge || maximumWeather <= required - 0.1;
+	return maximumTop < minHeight - edge || maxWeatherAnvil <= required - 0.1;
 }
 fn scLightOpticalDepth( p: vec3f, coverage: f32, lods: vec2f, cheap: bool ) -> f32 {
 	var opticalDepth = 0.0;
@@ -208,11 +225,87 @@ fn scLightEnergy( opticalDepth: f32, phase: vec3f ) -> f32 {
 fn scSky( dir: vec3f ) -> vec3f {
 	return atmosphereSkyLuminance( dir ) + frame.skyIrradiance * frame.night;
 }
-// key light: the sun while it is the app's key light, seen from cloud altitude, else the moon
-fn scDirect() -> vec3f {
+// key light at a given altitude (m): sun seen from cloud base or cloud top, else the moon
+fn scDirectAt( altM: f32 ) -> vec3f {
 	let isMoon = dot( frame.sunDir, atmosphereParams.sunDir ) < 0.9999;
-	let sunE = atmosphereSampleTransmittance( 6360.0 + scs.shell.x * 0.001, frame.sunDir.y ) * atmosphereParams.sunIlluminance;
+	let sunE = atmosphereSampleTransmittance( 6360.0 + altM * 0.001, frame.sunDir.y ) * atmosphereParams.sunIlluminance;
 	return select( sunE, frame.sunColor, isMoon );
+}
+
+// pure-WGSL 2D gradient noise for high-altitude cirrus / altostratus (zero extra samplers)
+fn scCirHash2( p: vec2f ) -> vec2f {
+	var p2 = vec2f( dot( p, vec2f( 127.1, 311.7 ) ), dot( p, vec2f( 269.5, 183.3 ) ) );
+	return -1.0 + 2.0 * fract( sin( p2 ) * 43758.5453123 );
+}
+fn scCirNoise( p: vec2f ) -> f32 {
+	let i = floor( p );
+	let f = fract( p );
+	let u = f * f * ( 3.0 - 2.0 * f );
+	return mix(
+		mix( dot( scCirHash2( i + vec2f( 0.0, 0.0 ) ), f - vec2f( 0.0, 0.0 ) ),
+			dot( scCirHash2( i + vec2f( 1.0, 0.0 ) ), f - vec2f( 1.0, 0.0 ) ), u.x ),
+		mix( dot( scCirHash2( i + vec2f( 0.0, 1.0 ) ), f - vec2f( 0.0, 1.0 ) ),
+			dot( scCirHash2( i + vec2f( 1.0, 1.0 ) ), f - vec2f( 1.0, 1.0 ) ), u.x ),
+		u.y ) * 0.5 + 0.5;
+}
+fn scCirFbm( pIn: vec2f ) -> f32 {
+	var p = pIn;
+	var sum = 0.0;
+	var amp = 0.5;
+	for ( var i = 0; i < 4; i++ ) {
+		sum += scCirNoise( p ) * amp;
+		p = mat2x2f( 0.8, 0.6, -0.6, 0.8 ) * p * 2.03 + vec2f( 17.1, 31.7 );
+		amp *= 0.5;
+	}
+	return sum;
+}
+
+struct ScCirrus { color: vec3f, alpha: f32, dist: f32 };
+fn scCirrus( origin: vec3f, dir: vec3f, zenith: vec3f, horizon: vec3f ) -> ScCirrus {
+	var res: ScCirrus;
+	res.color = vec3f( 0.0 ); res.alpha = 0.0; res.dist = SC_FAR;
+	let amount = scs.fade.w;
+	let veil = scf.cirrusWind.z;
+	if ( dir.y < -0.015 || ( amount <= 0.004 && veil <= 0.004 ) ) { return res; }
+	let H_CIR = 10200.0;
+	let roots = scShellRoots( dir, H_CIR, origin.y );
+	let tCir = select( roots.y, roots.x, origin.y >= H_CIR );
+	if ( tCir <= 0.0 ) { return res; }
+	res.dist = min( tCir, SC_FAR );
+	let tClamp = min( tCir, 145000.0 );
+	let hitXZ = origin.xz + dir.xz * tClamp - scf.cirrusWind.xy;
+	// upper wind veered +28 deg from surface wind
+	let wd = scs.wind.xy;
+	let uw = vec2f( wd.x * 0.8829 - wd.y * 0.4695, wd.x * 0.4695 + wd.y * 0.8829 );
+	let pFlow = vec2f( dot( hitXZ, uw ), dot( hitXZ, vec2f( -uw.y, uw.x ) ) );
+	let warp = vec2f( scCirNoise( pFlow * 0.000035 ), scCirNoise( pFlow * 0.000035 + vec2f( 4.7, 9.2 ) ) ) - 0.5;
+	let cov = smoothstep( 0.34, 0.78, scCirFbm( pFlow * 0.000022 + warp * 0.45 ) );
+	let fib = scCirFbm( vec2f( pFlow.x * 0.000072, pFlow.y * 0.00033 ) + warp * 1.15 );
+	let wisp = scCirFbm( vec2f( pFlow.x * 0.00018, pFlow.y * 0.00095 ) + warp * 0.8 );
+	let strands = smoothstep( 0.36, 0.82, fib * 0.65 + wisp * 0.35 );
+	let tau = amount * cov * strands * 0.26 + veil * ( 0.14 + cov * 0.14 );
+	let elevFade = smoothstep( -0.01, 0.09, dir.y );
+	let alpha = ( 1.0 - exp( -tau / clamp( abs( dir.y ) + 0.15, 0.15, 1.0 ) ) ) * elevFade;
+	if ( alpha <= 0.001 ) { return res; }
+
+	let sunReal = atmosphereParams.sunDir;
+	let sunTrans = atmosphereSampleTransmittance( 6360.0 + 10.2, sunReal.y );
+	let earthShadow = smoothstep( -0.095, -0.015, sunReal.y );
+	let sunHigh = sunTrans * atmosphereParams.sunIlluminance * earthShadow;
+	let isMoon = dot( frame.sunDir, sunReal ) < 0.9999;
+	let moonHigh = select( vec3f( 0.0 ), frame.sunColor * 0.4, isMoon );
+	let muS = dot( dir, sunReal );
+	let phase = 0.24 + 0.55 * pow( max( muS, 0.0 ), 4.0 ) + scHG( muS, 0.65 ) * 0.35;
+	let amb = mix( horizon, zenith, 0.55 ) * 0.75;
+	var col = ( sunHigh * phase * 0.22 + moonHigh * 0.35 + amb ) * alpha;
+	// aerial perspective melt near the horizon
+	let sky = scSky( dir );
+	let apDist = 95000.0 / max( 0.45, scf.cirrusWind.w );
+	let ap = exp( -tClamp / apDist );
+	col = col * ap + sky * alpha * ( 1.0 - ap );
+	res.color = col;
+	res.alpha = alpha;
+	return res;
 }
 
 struct ScMarch { color: vec3f, alpha: f32, depth: f32, steps: u32 };
@@ -223,20 +316,21 @@ fn scMarch( origin: vec3f, dir: vec3f, dither: f32, pixelConeAngle: f32, stepCon
 	let interval = scCloudInterval( dir, origin.y );
 	var color = vec3f( 0.0 ); var transmission = 1.0; var weightedDepth = 0.0;
 	var steps = 0u;
+	let zenith = scSky( vec3f( 0.0, 1.0, 0.0 ) );
+	let L = frame.sunDir;
+	let horizon = scSky( normalize( vec3f( L.x, 0.03, L.z ) + vec3f( 1e-5, 0.0, 0.0 ) ) );
 	if ( interval.y > interval.x && scs.shell.w > 0.0 && scs.shell.z > 0.0 ) {
-		let L = frame.sunDir;
 		let lightCosine = dot( dir, L );
 		let phase = scPhases( lightCosine );
-		let direct = scDirect();
-		let zenith = scSky( vec3f( 0.0, 1.0, 0.0 ) );
-		let horizon = scSky( normalize( vec3f( L.x, 0.03, L.z ) + vec3f( 1e-5, 0.0, 0.0 ) ) );
-		let bounce = scs.bounce.rgb * direct * max( L.y, 0.0 );
+		let directLow = scDirectAt( scs.shell.x );
+		let directHigh = scDirectAt( scs.shell.x + scs.shell.y * 0.85 );
+		let bounce = scs.bounce.rgb * directLow * max( L.y, 0.0 );
 		var t = interval.x + dither * scf.march.x;
 		var coarse = true; var emptyRun = 0u; var accumulatedDepth = 0.0;
 		var refineEnd = -1.0;
-		var cellEnd = -1.0; var cellStart = -1.0; var maximumWeather = 1.0;
+		var cellEnd = -1.0; var cellStart = -1.0; var cellBounds = vec2f( 1.0, 1.0 );
 		var shadowAt = -SC_FAR; var shadowDensity = -1.0; var shadowTau = 0.0; var skyTau = 0.0; var shadowCheap = false;
-		let hasDirectLight = max( direct.x, max( direct.y, direct.z ) ) > 0.00001;
+		let hasDirectLight = max( directHigh.x, max( directHigh.y, directHigh.z ) ) > 0.00001;
 		for ( var i = 0u; i < maxSteps; i++ ) {
 			if ( t >= interval.y || transmission < 0.003 ) { break; }
 			steps++;
@@ -245,12 +339,12 @@ fn scMarch( origin: vec3f, dir: vec3f, dither: f32, pixelConeAngle: f32, stepCon
 					let size = vec2i( textureDimensions( scWeatherBounds ) );
 					let grid = ( origin.xz + dir.xz * t - scf.wind.xy ) / scs.shape.x * vec2f( size );
 					let cell = vec2i( floor( grid ) );
-					maximumWeather = textureLoad( scWeatherBounds, ( ( cell % size ) + size ) % size, 0 ).r;
+					cellBounds = textureLoad( scWeatherBounds, ( ( cell % size ) + size ) % size, 0 ).rg;
 					let distance = select( fract( grid ), 1.0 - fract( grid ), dir.xz >= vec2f( 0.0 ) )
 						/ max( abs( dir.xz ) * vec2f( size ) / scs.shape.x, vec2f( 0.0000001 ) );
 					cellStart = t; cellEnd = min( interval.y, t + max( min( distance.x, distance.y ), 0.05 ) );
 				}
-				if ( scCellIsEmpty( t, cellEnd, dir, origin.y, maximumWeather ) ) { t = cellEnd + 0.05; continue; }
+				if ( scCellIsEmpty( t, cellEnd, dir, origin.y, cellBounds ) ) { t = cellEnd + 0.05; continue; }
 			}
 			let footprint = t * pixelConeAngle;
 			let fineStep = max( scf.march.x, t * stepConeAngle * 1.5 );
@@ -288,7 +382,7 @@ fn scMarch( origin: vec3f, dir: vec3f, dither: f32, pixelConeAngle: f32, stepCon
 			let baseShadow = mix( 1.0, mix( 0.15, 1.0, smoothstep( 0.0, max( scs.shadow.y, 0.001 ), height ) ), scs.shadow.x );
 			// darken thin margins away from the sun; keep the forward scattered silver linings
 			let powderWeight = scs.cloudLight.y * ( 1.0 - smoothstep( 0.2, 0.95, lightCosine ) );
-			let powder = mix( 1.0, 1.0 - exp( -density * 2.0 ), powderWeight );
+			let powder = mix( 1.0, 1.0 - exp( -density * 2.3 ), powderWeight );
 			var energy = 0.0;
 			let cheap = ( 1.0 - transmission ) >= scf.march.w;
 			let reuseDistance = min( fineStep * scf.display.y, max( 20.0, scs.shape.y * scs.shape.w * 0.03 ) );
@@ -303,28 +397,44 @@ fn scMarch( origin: vec3f, dir: vec3f, dither: f32, pixelConeAngle: f32, stepCon
 			if ( hasDirectLight ) {
 				energy = scLightEnergy( shadowTau + sigmaT * scf.lightOffsets[ 0 ].w, phase );
 			}
-			let skyVisibility = 0.2 + 0.8 / ( 1.0 + ( skyTau + sigmaT * 25.0 ) * 0.35 );
+			let direct = mix( directLow, directHigh, height );
+			let coreDark = 1.0 - c.rainCore * 0.32 * ( 1.0 - height * 0.65 );
+			let skyVisibility = 0.22 + 0.78 / ( 1.0 + ( skyTau + sigmaT * 25.0 ) * 0.35 );
 			let ambient = ( mix( mix( zenith, horizon, 0.55 ), zenith, sqrt( height ) ) * skyVisibility + bounce * ( 1.0 - height ) )
 				* scs.cloudLight.z * ( 1.0 + scs.cloudLight.w );
-			let light = ( direct * energy * powder * baseShadow + ambient ) * scs.cloudLight.x;
+			var boltGlow = vec3f( 0.0 );
+			if ( scf.lightningPos.w > 0.001 ) {
+				let dp = p - scf.lightningPos.xyz;
+				let d2 = dot( dp, dp );
+				boltGlow = vec3f( 0.74, 0.86, 1.0 ) * ( scf.lightningPos.w / ( 1.0 + d2 * 1.6e-7 ) ) * ( 0.35 + 0.65 * ( 1.0 - height ) );
+			}
+			let light = ( direct * energy * powder * baseShadow * coreDark + ambient * coreDark + boltGlow ) * scs.cloudLight.x;
 			let stepT = exp( -sigmaT * stepLength );
 			let alpha = transmission * ( 1.0 - stepT );
 			color += alpha * light; weightedDepth += alpha * t;
 			transmission *= stepT; accumulatedDepth += sigmaT * stepLength; t += stepLength;
 		}
 	}
-	let alpha = 1.0 - transmission;
+	let cumAlpha = 1.0 - transmission;
 	var depth = SC_FAR;
-	if ( alpha > 0.0 ) {
-		depth = weightedDepth / alpha;
+	if ( cumAlpha > 0.0 ) {
+		depth = weightedDepth / cumAlpha;
 		// aerial perspective (distance toward the sky behind), then the far melt into the sky
 		let sky = scSky( dir );
-		let ap = exp( -depth / SC_AP_DIST );
-		color = color * ap + sky * alpha * ( 1.0 - ap );
+		let apScale = SC_AP_DIST / max( 0.45, scf.cirrusWind.w );
+		let ap = exp( -depth / apScale );
+		color = color * ap + sky * cumAlpha * ( 1.0 - ap );
 		let melt = smoothstep( scs.fade.y, max( scs.fade.z, scs.fade.y + 1.0 ), depth );
-		color = mix( color, sky * alpha, melt );
+		color = mix( color, sky * cumAlpha, melt );
 	}
-	out.color = color; out.alpha = alpha; out.depth = depth; out.steps = steps;
+	// high-altitude cirrus / altostratus behind the cumulus layer
+	let cir = scCirrus( origin, dir, zenith, horizon );
+	if ( cir.alpha > 0.001 ) {
+		color += transmission * cir.color;
+		transmission *= ( 1.0 - cir.alpha );
+		if ( cumAlpha < 0.01 ) { depth = cir.dist; }
+	}
+	out.color = color; out.alpha = 1.0 - transmission; out.depth = depth; out.steps = steps;
 	return out;
 }
 `;
@@ -361,6 +471,16 @@ fn scFbm( uv: vec2f, profile: vec4f ) -> f32 {
 	}
 	return sum / max( weights, 0.001 ) * 0.5 + 0.5;
 }
+fn scFbmEvolve( uv: vec2f, profile: vec4f, zPhase: f32 ) -> f32 {
+	var frequency = max( 1.0, round( profile.x ) ); var weight = 0.5;
+	var sum = 0.0; var weights = 0.0;
+	for ( var i = 0u; i < u32( profile.y ); i++ ) {
+		let z = ( profile.z * 13.37 + 0.5 ) * frequency + zPhase * ( 1.0 + f32( i ) * 0.25 );
+		sum += scPerlin( vec3f( uv * frequency, z ), i32( frequency ) ) * weight;
+		weights += weight; weight *= 0.5; frequency *= 2.0;
+	}
+	return sum / max( weights, 0.001 ) * 0.5 + 0.5;
+}
 `;
 
 export class SkyProClouds {
@@ -380,6 +500,8 @@ export class SkyProClouds {
 			pano: [ 'vec4f', v4() ], shadow: [ 'vec4f', v4() ],
 			lightOffsets: [ 'vec4f[8]', new Float32Array( 32 ) ],
 			lightLods: [ 'vec4f[8]', new Float32Array( 32 ) ],
+			lightningPos: [ 'vec4f', v4() ],
+			cirrusWind: [ 'vec4f', [ 0, 0, 0.08, 1.0 ] ],
 		}, { label: 'sky clouds frame' } );
 		this.settingsBlock = new UniformBlock( 'SkyCloudSettings', {
 			shell: [ 'vec4f', [ s.altitude, s.thickness, s.density, s.coverage ] ],
@@ -390,19 +512,24 @@ export class SkyProClouds {
 			horizon: [ 'vec4f', [ s.horizonCoverageStart, s.horizonCoverageRamp, s.horizonCoverageAmount, 0 ] ],
 			// w: the atmosphere's multiple scattering term of the ambient
 			cloudLight: [ 'vec4f', [ l.scatteringAlbedo, l.powderStrength, l.ambientIntensity, P.atmosphere.multipleScattering ] ],
-			shadow: [ 'vec4f', [ l.baseShadowStrength, l.baseShadowHeight, l.moonGain, 0 ] ],
+			// w: global cloud type (0=stratus, 0.5=cumulus, 1=cumulonimbus)
+			shadow: [ 'vec4f', [ l.baseShadowStrength, l.baseShadowHeight, l.moonGain, 0.5 ] ],
 			bounce: [ 'vec4f', [ ...l.groundBounceAlbedo, 0 ] ],
-			wind: [ 'vec4f', [ 0, 1, P.wind.skew, 0 ] ],
-			fade: [ 'vec4f', [ P.fade.hazeDensityScale, P.fade.horizonMeltStart, P.fade.horizonMeltEnd, 0 ] ],
+			// w: anvil amount (0..1)
+			wind: [ 'vec4f', [ 0, 1, P.wind.skew, 0.05 ] ],
+			// w: cirrus amount (0..1)
+			fade: [ 'vec4f', [ P.fade.hazeDensityScale, P.fade.horizonMeltStart, P.fade.horizonMeltEnd, 0.48 ] ],
 			weatherMass: [ 'vec4f', P.weather.mainMass.slice() ],
 			weatherDetail: [ 'vec4f', P.weather.detail.slice() ],
-			weather: [ 'vec4f', [ P.weather.coverage, 0, 0, 0 ] ],
+			// x: coverage bias, y: evolution z-phase, z: domain warp strength
+			weather: [ 'vec4f', [ P.weather.coverage, 0, 0.055, 0 ] ],
 		}, { label: 'sky clouds settings' } );
 		this.F = this.frameBlock.fields;
 		this.S = this.settingsBlock.fields;
 
 		// ---- public handles
 		this.coverage = { value: s.coverage };
+		this.cirrus = { value: 0.48 };
 		this.resolutionScale = 1;
 		this.outputSize = null;
 
@@ -434,9 +561,14 @@ export class SkyProClouds {
 		this.weatherDirty = true;
 		this.panoWarm = true;
 		this._windX = 0; this._windZ = 0; this._evolution = 0; this._elapsed = 0;
+		this._cirrusWindX = 0; this._cirrusWindZ = 0;
+		this._weatherPhase = 0; this._weatherTimer = 0;
+		this._evolutionScale = 1.0; this._altostratus = 0.0; this._hazeScale = 1.0;
+		this._changeRate = 0;
 		this._prevCam = null;
 		this._prevLight = new Vector3();
 		this._lastCoverage = - 1;
+		this._lastAlt = s.altitude;
 
 	}
 
@@ -611,9 +743,18 @@ ${ MAIN } {
 	let size = textureDimensions( scOut );
 	if ( any( id.xy >= size ) ) { return; }
 	let uv = vec2f( id.xy ) / vec2f( size );
-	let mass = clamp( ( scFbm( uv, scs.weatherMass ) - 0.5 ) * scs.weatherMass.w + 0.5, 0.0, 1.0 );
-	let detail = ( scFbm( uv, scs.weatherDetail ) * 2.0 - 1.0 ) * scs.weatherDetail.w;
-	textureStore( scOut, id.xy, vec4f( clamp( mass + detail + scs.weather.x - 0.5, 0.0, 1.0 ), 0.0, 0.0, 1.0 ) );
+	let phase = scs.weather.y;
+	let warpAmp = scs.weather.z;
+	let wx = scFbmEvolve( fract( uv + vec2f( 0.17, 0.43 ) ), vec4f( 2.0, 2.0, 0.0, 0.0 ), phase * 0.35 ) - 0.5;
+	let wy = scFbmEvolve( fract( uv + vec2f( 0.63, 0.19 ) ), vec4f( 2.0, 2.0, 0.37, 0.0 ), phase * 0.35 ) - 0.5;
+	let uvW = fract( uv + vec2f( wx, wy ) * warpAmp );
+	let mass = clamp( ( scFbmEvolve( uvW, scs.weatherMass, phase ) - 0.5 ) * scs.weatherMass.w + 0.5, 0.0, 1.0 );
+	let detail = ( scFbmEvolve( uvW, scs.weatherDetail, phase * 1.15 ) * 2.0 - 1.0 ) * scs.weatherDetail.w;
+	let cov = clamp( mass + detail + scs.weather.x - 0.5, 0.0, 1.0 );
+	let cellType = scFbmEvolve( fract( uvW + vec2f( 0.41, 0.77 ) ), vec4f( 2.0, 3.0, 0.81, 0.0 ), phase * 0.45 );
+	let localType = clamp( scs.shadow.w * 0.72 + ( cellType - 0.45 ) * 0.55, 0.0, 1.0 );
+	let rainCore = smoothstep( 0.52, 0.9, cov ) * smoothstep( 0.42, 0.85, localType );
+	textureStore( scOut, id.xy, vec4f( cov, localType, rainCore, 1.0 ) );
 }` );
 
 		this.boundsKernel = K( 'Cloud Weather Bounds', [ this.coreModule ], { scOut: { storageTexture: this.weatherBounds } }, /* wgsl */`
@@ -625,14 +766,17 @@ ${ MAIN } {
 	// both bilinear neighbours at cell boundaries, including the repeat seam
 	let lo = vec2i( floor( vec2f( id.xy ) * scale - 0.5 ) );
 	let hi = vec2i( ceil( vec2f( id.xy + 1u ) * scale - 0.5 ) );
-	var maximum = 0.0;
+	var maxR = 0.0;
+	var maxG = 0.0;
 	for ( var y = lo.y; y <= hi.y; y++ ) {
 		for ( var x = lo.x; x <= hi.x; x++ ) {
 			let p = ( ( vec2i( x, y ) % sourceSize ) + sourceSize ) % sourceSize;
-			maximum = max( maximum, textureLoad( scWeatherMap, p, 0 ).r );
+			let v = textureLoad( scWeatherMap, p, 0 );
+			maxR = max( maxR, v.r );
+			maxG = max( maxG, v.g );
 		}
 	}
-	textureStore( scOut, id.xy, vec4f( min( 1.0, maximum + 1.0 / 255.0 ), 0.0, 0.0, 1.0 ) );
+	textureStore( scOut, id.xy, vec4f( min( 1.0, maxR + 1.0 / 255.0 ), min( 1.0, maxG + 1.0 / 255.0 ), 0.0, 1.0 ) );
 }` );
 
 		// the view: one lattice slot of every block per frame
@@ -867,6 +1011,65 @@ ${ MAIN } {
 
 	}
 
+	setLightning( cloudLight ) {
+
+		if ( cloudLight ) this.F.lightningPos.value = cloudLight;
+		else this.F.lightningPos.value = [ 0, 0, 0, 0 ];
+
+	}
+
+	applyWeather( w, dt = 0, lightning = null ) {
+
+		if ( ! w ) return;
+		const P = PRESET, S = this.S;
+
+		const prevCov = this.coverage.value;
+		const prevAlt = S.shell.value[ 0 ];
+		if ( w.coverage !== undefined ) this.coverage.value = w.coverage;
+		if ( w.cirrus !== undefined ) this.cirrus.value = w.cirrus;
+
+		const alt = w.altitude ?? P.shape.altitude;
+		const thick = w.thickness ?? P.shape.thickness;
+		const dens = w.density ?? P.shape.density;
+		S.shell.value[ 0 ] = alt;
+		S.shell.value[ 1 ] = thick;
+		S.shell.value[ 2 ] = dens;
+
+		const softness = w.edgeSoftness ?? P.shape.edgeSoftness;
+		S.base.value[ 1 ] = softness;
+		S.base.value[ 2 ] = Math.log2( Math.max( P.shape.edgeSoftnessFalloff, 0.001 ) ) * thick * 0.001;
+
+		const darkness = MathUtils.clamp( w.darkness ?? 0, 0, 0.9 );
+		S.cloudLight.value[ 0 ] = P.lighting.scatteringAlbedo * ( 1 - darkness * 0.44 );
+		S.cloudLight.value[ 1 ] = P.lighting.powderStrength * ( 1 - darkness * 0.35 );
+		S.cloudLight.value[ 2 ] = P.lighting.ambientIntensity * ( 1 - darkness * 0.32 );
+		S.shadow.value[ 0 ] = MathUtils.clamp( P.lighting.baseShadowStrength + darkness * 0.10, 0, 0.98 );
+		S.shadow.value[ 3 ] = MathUtils.clamp( w.cloudType ?? 0.5, 0, 1 );
+
+		const windSpd = G.windSpeed ? G.windSpeed.value : 7;
+		S.wind.value[ 2 ] = P.wind.skew * MathUtils.clamp( 0.65 + windSpd / 16, 0.5, 1.85 );
+		S.wind.value[ 3 ] = MathUtils.clamp( w.anvil ?? 0.05, 0, 1 );
+		S.fade.value[ 3 ] = MathUtils.clamp( this.cirrus.value, 0, 1 );
+
+		this._evolutionScale = Math.max( 0.25, w.evolution ?? 1.0 );
+		const storm = MathUtils.clamp( w.stormIntensity ?? 0, 0, 1 );
+		const cType = w.cloudType ?? 0.5;
+		// Altostratus veil rises during overcast / pre-rain conditions
+		this._altostratus = MathUtils.clamp( ( 1 - cType ) * 0.45 * darkness + storm * 0.55, 0, 0.85 );
+		this._hazeScale = MathUtils.clamp( 0.5 + 0.35 * ( w.hazeDensity ?? 1.45 ), 0.5, 2.2 );
+
+		// Track rate of change to smoothly blend temporal history instead of invalidating on slow drifts
+		if ( dt > 1e-4 ) {
+
+			const rate = Math.abs( this.coverage.value - prevCov ) / dt + Math.abs( alt - prevAlt ) / ( 1200 * dt );
+			this._changeRate = Math.min( 0.35, rate * 0.6 );
+
+		}
+
+		if ( lightning ) this.setLightning( lightning );
+
+	}
+
 	update( dt, camera ) {
 
 		const q = QUALITY, P = PRESET, F = this.F, S = this.S;
@@ -881,14 +1084,24 @@ ${ MAIN } {
 
 		}
 
-		// ---- settings: coverage, wind direction
+		// ---- settings: coverage, cirrus, altitude, wind direction
 		const cov = this.coverage.value;
-		if ( cov !== this._lastCoverage ) {
+		const alt = S.shell.value[ 0 ];
+		S.fade.value[ 3 ] = MathUtils.clamp( this.cirrus.value, 0, 1 );
+		if ( cov !== this._lastCoverage || alt !== this._lastAlt ) {
 
+			const bigJump = this._lastCoverage < 0
+				|| Math.abs( cov - this._lastCoverage ) > 0.14
+				|| Math.abs( alt - this._lastAlt ) > 500;
 			S.shell.value[ 3 ] = cov;
 			this._lastCoverage = cov;
-			this.historyValid = false;
-			this.panoWarm = true;
+			this._lastAlt = alt;
+			if ( bigJump ) {
+
+				this.historyValid = false;
+				this.panoWarm = true;
+
+			}
 
 		}
 
@@ -896,6 +1109,17 @@ ${ MAIN } {
 		const wl = Math.hypot( wd.x, wd.y ) || 1;
 		const wx = wd.x / wl, wz = wd.y / wl;
 		S.wind.value[ 0 ] = wx; S.wind.value[ 1 ] = wz;
+
+		// Slowly evolve weather map in 3D noise space so clouds gather and dissipate over many minutes
+		this._weatherPhase += dt * 0.0022 * this._evolutionScale;
+		this._weatherTimer -= dt;
+		if ( this._weatherTimer <= 0 ) {
+
+			S.weather.value[ 1 ] = this._weatherPhase;
+			this.weatherDirty = true;
+			this._weatherTimer = 0.8;
+
+		}
 
 		if ( this.weatherDirty ) {
 
@@ -956,16 +1180,26 @@ ${ MAIN } {
 		F.viewport.value = [ size.x * this.resolutionScale, size.y * this.resolutionScale, this.historyWidth, this.historyHeight ];
 		F.sampling.value = [ lx, ly, lat, this.historyValid ? 1 : 0 ];
 
-		// ---- clock and wind
+		// ---- clock and wind (tied to dynamic surface wind + upper-air cirrus drift)
 		this._elapsed += dt;
-		const speed = P.wind.speed;
+		const windSpd = G.windSpeed ? G.windSpeed.value : 7;
+		const speed = MathUtils.clamp( windSpd * 0.65, 2.2, 13.0 );
+		const evoSpeed = speed * 0.085 * this._evolutionScale;
 		const dx = wx * speed * dt, dz = wz * speed * dt;
-		this._windX += dx; this._windZ += dz; this._evolution += P.wind.evolutionSpeed * dt;
+		this._windX += dx; this._windZ += dz; this._evolution += evoSpeed * dt;
+		const cAng = Math.atan2( wz, wx ) + 0.488;
+		const cSpeed = speed * 1.1;
+		this._cirrusWindX += Math.cos( cAng ) * cSpeed * dt;
+		this._cirrusWindZ += Math.sin( cAng ) * cSpeed * dt;
+		F.cirrusWind.value = [ this._cirrusWindX, this._cirrusWindZ, this._altostratus, this._hazeScale ];
+
 		F.clock.value = [ this.frameIndex % 4096, this._elapsed, dt, 0 ];
 		F.wind.value = [ this._windX, this._windZ, this._evolution, 0 ];
 		F.windDelta.value = [ dx, dz, 0, 0 ];
 		F.march.value = [ q.stepMeters, q.maxSteps, q.lightTaps, q.fullLightingAlpha ];
-		F.temporal.value = [ q.historyWeight, Math.min( 1, P.wind.evolutionSpeed * dt / 100 ), 0, 0 ];
+		const evoDecay = Math.min( 0.35, evoSpeed * dt / 100 + this._changeRate * dt * 2.0 );
+		this._changeRate *= Math.exp( - dt * 4.0 );
+		F.temporal.value = [ q.historyWeight, evoDecay, 0, 0 ];
 		F.display.value = [ 0, q.lightReuseSteps, 0, 0 ];
 
 		// ---- light march taps: a 25 m local segment, then geometric growth to ~2.5 km over a cone

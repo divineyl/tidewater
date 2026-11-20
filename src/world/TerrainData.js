@@ -602,6 +602,100 @@ export class TerrainData {
 
 		}
 
+		// ---- scenic dirt roads: graded smooth profile with wide shoulders before painting paths
+		for ( const p of PATHS ) {
+
+			if ( ! p.road || p.pts.length < 2 ) continue;
+			const samples = [];
+			let arc = 0;
+			for ( let s = 0; s < p.pts.length - 1; s ++ ) {
+
+				const [ ax, az ] = p.pts[ s ], [ bx, bz ] = p.pts[ s + 1 ];
+				const segLen = Math.hypot( bx - ax, bz - az );
+				const steps = Math.max( 1, Math.round( segLen / 2.0 ) );
+				for ( let k = ( s === 0 ? 0 : 1 ); k <= steps; k ++ ) {
+
+					const f = k / steps;
+					const sx = ax + ( bx - ax ) * f, sz = az + ( bz - az ) * f;
+					if ( samples.length > 0 ) {
+
+						const prev = samples[ samples.length - 1 ];
+						arc += Math.hypot( sx - prev.x, sz - prev.z );
+
+					}
+
+					samples.push( { x: sx, z: sz, s: arc, h: Math.max( 1.25, sampleGrid( H, res, o, 1, sx, sz ) ) } );
+
+				}
+
+			}
+
+			// Smooth roadbed longitudinal elevation profile & cap steep pitch transitions (<= ~16%)
+			for ( let pass = 0; pass < 24; pass ++ ) {
+
+				for ( let k = 1; k < samples.length - 1; k ++ ) {
+
+					samples[ k ].h = samples[ k - 1 ].h * 0.25 + samples[ k ].h * 0.5 + samples[ k + 1 ].h * 0.25;
+
+				}
+
+			}
+
+			const maxGrade = 0.16;
+			for ( let pass = 0; pass < 10; pass ++ ) {
+
+				for ( let k = 1; k < samples.length; k ++ ) {
+
+					const ds = samples[ k ].s - samples[ k - 1 ].s;
+					const dhMax = maxGrade * ds;
+					const diff = samples[ k ].h - samples[ k - 1 ].h;
+					if ( Math.abs( diff ) > dhMax ) samples[ k ].h = samples[ k - 1 ].h + Math.sign( diff ) * dhMax;
+
+				}
+
+				for ( let k = samples.length - 2; k >= 0; k -- ) {
+
+					const ds = samples[ k + 1 ].s - samples[ k ].s;
+					const dhMax = maxGrade * ds;
+					const diff = samples[ k ].h - samples[ k + 1 ].h;
+					if ( Math.abs( diff ) > dhMax ) samples[ k ].h = samples[ k + 1 ].h + Math.sign( diff ) * dhMax;
+
+				}
+
+			}
+
+			const samplePts = samples.map( ( sp ) => [ sp.x, sp.z ] );
+			const totalArc = samples[ samples.length - 1 ].s || 1;
+			const shoulder = p.shoulder ?? 9.0;
+			let x0 = Infinity, x1 = - Infinity, z0 = Infinity, z1 = - Infinity;
+			for ( const [ px, pz ] of p.pts ) {
+
+				x0 = Math.min( x0, px ); x1 = Math.max( x1, px ); z0 = Math.min( z0, pz ); z1 = Math.max( z1, pz );
+
+			}
+
+			const R = p.w + shoulder + 2;
+			const i0 = Math.max( 0, Math.floor( x0 - R - o ) ), i1 = Math.min( res - 1, Math.ceil( x1 + R - o ) );
+			const j0 = Math.max( 0, Math.floor( z0 - R - o ) ), j1 = Math.min( res - 1, Math.ceil( z1 + R - o ) );
+			for ( let j = j0; j <= j1; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
+
+				const x = o + i + 0.5, z = o + j + 0.5;
+				const [ dist, closestArc ] = polylineDistance( samplePts, x, z );
+				if ( dist >= p.w + shoulder ) continue;
+				const u = clamp( closestArc / totalArc, 0, 1 ) * ( samples.length - 1 );
+				const idx0 = Math.min( samples.length - 1, Math.floor( u ) );
+				const idx1 = Math.min( samples.length - 1, idx0 + 1 );
+				const targetH = lerp( samples[ idx0 ].h, samples[ idx1 ].h, u - idx0 );
+				const blend = 1 - smoothstep( p.w, p.w + shoulder, dist );
+				const k = j * res + i;
+				H[ k ] = lerp( H[ k ], targetH, blend );
+				const rc = 1 - smoothstep( p.w * 0.85, p.w * 1.9, dist );
+				R0[ k ] *= ( 1 - 0.92 * rc );
+
+			}
+
+		}
+
 		// ---- footpaths: worn, slightly sunken
 		for ( const p of PATHS ) {
 
@@ -613,20 +707,22 @@ export class TerrainData {
 			}
 
 			const R = p.w * 2 + 2;
-			const i0 = Math.floor( x0 - R - o ), i1 = Math.ceil( x1 + R - o );
-			const j0 = Math.floor( z0 - R - o ), j1 = Math.ceil( z1 + R - o );
+			const i0 = Math.max( 0, Math.floor( x0 - R - o ) ), i1 = Math.min( res - 1, Math.ceil( x1 + R - o ) );
+			const j0 = Math.max( 0, Math.floor( z0 - R - o ) ), j1 = Math.min( res - 1, Math.ceil( z1 + R - o ) );
+			const wobble = p.road ? 0.12 : 0.25;
+			const sinkMax = p.road ? 0.025 : 0.08;
 			for ( let j = j0; j <= j1; j ++ ) for ( let i = i0; i <= i1; i ++ ) {
 
 				const x = o + i + 0.5, z = o + j + 0.5;
 				const [ dist ] = polylineDistance( p.pts, x, z );
-				const w = p.w * ( 1 + 0.25 * n2.noise( x / 6, z / 6 ) );
+				const w = p.w * ( 1 + wobble * n2.noise( x / 6, z / 6 ) );
 				const m = 1 - smoothstep( w * 0.6, w * 1.9, dist );
 				if ( m <= 0 ) continue;
 				const k = j * res + i;
 				const v = Math.round( m * 255 );
 				if ( v > this.path[ k ] ) this.path[ k ] = v;
-				// sink up to 8 cm (none on the beach where it would disturb the swash)
-				const sink = 0.08 * ( 1 - smoothstep( w * 0.4, w * 1.2, dist ) ) * smoothstep( 1.5, 3, H[ k ] );
+				// sink up to 8 cm on footpaths (2.5 cm gentle cambered rut on scenic roads)
+				const sink = sinkMax * ( 1 - smoothstep( w * 0.4, w * 1.2, dist ) ) * smoothstep( 1.5, 3, H[ k ] );
 				H[ k ] -= sink;
 
 			}

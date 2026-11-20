@@ -171,6 +171,33 @@ ok( Object.keys( defaultUpgrades() ).length === Object.keys( UPGRADES ).length &
 	ok( st.buy( 'fishFinder' ) && st.stats.finder === true && st.buy( 'fishFinder' ) === null, 'fish finder: one level' );
 
 }
+
+// ---- weather effects on bites
+{
+
+	const clearW = { rainIntensity: 0, stormIntensity: 0, pressure: 1021 };
+	const showerW = { rainIntensity: 0.55, stormIntensity: 0.5, pressure: 1001 };
+	const stormW = { rainIntensity: 1.0, stormIntensity: 1.0, pressure: 992 };
+	const pierH = habitatAt( spots.pier );
+	const deepH = habitatAt( spots.deep );
+
+	const clearDelay = biteDelay( pierH, 12, () => 0.5, clearW );
+	const showerDelay = biteDelay( pierH, 12, () => 0.5, showerW );
+	const baseDelay = biteDelay( pierH, 12, () => 0.5 );
+	ok( showerDelay < clearDelay && Number.isFinite( baseDelay ), `shower/low-pressure speeds up pier bites (${ showerDelay.toFixed( 2 ) }s < ${ clearDelay.toFixed( 2 ) }s)` );
+
+	const preds = new Set( [ 'tuna', 'mahi', 'barracuda', 'tarpon' ] );
+	let clearPred = 0, stormPred = 0;
+	for ( let i = 0; i < 4000; i ++ ) {
+
+		if ( preds.has( pickSpecies( deepH, 14, rng, clearW ) ) ) clearPred ++;
+		if ( preds.has( pickSpecies( deepH, 14, rng, stormW ) ) ) stormPred ++;
+
+	}
+
+	ok( stormPred > clearPred, `storm boosts offshore pelagic predator share (${ stormPred } vs ${ clearPred })` );
+
+}
 console.log( `value check ${ value }` );
 console.log( fails ? `${ fails } FAILED` : 'all passed' );
 process.exit( fails ? 1 : 0 );

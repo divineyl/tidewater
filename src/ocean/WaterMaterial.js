@@ -298,7 +298,15 @@ ${ SH ? '	let folded = surf.jacobian < 0.1 || normalize( in.vs.vShoreN ).y < 0.3
 	// (tiny self-intersections of the choppy FFT surface render as back faces seen from above),
 	// so pick the side from the camera and bend facets that face away to grazing instead of
 	// flipping them (a flipped normal turns a fold into a white sky-mirror patch).
-	let Nup = normalize( mix( surf.normal, vec3f( 0.0, 1.0, 0.0 ), whaleW.y * 0.75 ) );
+	let NupRaw = normalize( mix( surf.normal, vec3f( 0.0, 1.0, 0.0 ), whaleW.y * 0.75 ) );
+	var Nup = NupRaw;
+	var rainRough = 0.0;
+	if ( ! viewFromBelow && frame.weather.x > 0.01 && dist < 48.0 ) {
+		let ripFade = smoothstep( 46.0, 6.0, dist );
+		let rSlope = waterRainRipples( pos.xz, frame.time, frame.weather.x ) * ripFade;
+		Nup = normalize( NupRaw + vec3f( rSlope.x, 0.0, rSlope.y ) );
+		rainRough = frame.weather.x * 0.0018 * ripFade;
+	}
 	let Nside = select( Nup, - Nup, viewFromBelow );
 	let Nview = normalize( Nside + V * max( - dot( Nside, V ) + 0.03, 0.0 ) );
 
@@ -307,7 +315,7 @@ ${ SH ? '	let folded = surf.jacobian < 0.1 || normalize( in.vs.vShoreN ).y < 0.3
 	let kpx = PI / footprint;
 	let unresolved = sat( log2( 110.0 / kpx ) / 9.0 );
 	let roughVar = surf.rough * surf.rough;
-	let alpha2 = ( mat.waterRoughness * mat.waterRoughness + mss * 2.0 * unresolved * roughVar + foam * 0.2 + surf.aeration * 0.03 ) * ( 1.0 - whaleW.y * 0.6 );
+	let alpha2 = ( mat.waterRoughness * mat.waterRoughness + mss * 2.0 * unresolved * roughVar + foam * 0.2 + surf.aeration * 0.03 + rainRough ) * ( 1.0 - whaleW.y * 0.6 );
 	// slope spread the mesh / normal maps can't show at this distance (for the reflection)
 	let sigmaUnres = sqrt( mss * unresolved * roughVar );
 
@@ -734,6 +742,45 @@ fn _waterSSR( posV: vec3f, Rv: vec3f, y0: f32, ry: f32 ) -> vec4f {
 		weight = edge * facing * touch * smoothstep( 260.0, 120.0, hitT ) * smoothstep( frame.seaLevel - 0.15, frame.seaLevel + 0.35, hitY );
 	}
 	return vec4f( color, weight );
+}
+
+// pure-math concentric raindrop ripples (zero texture samplers)
+fn _waterRippleCell( xz: vec2f, t: f32, rate: f32, scale: f32, seed: f32 ) -> vec2f {
+	let q = xz * scale;
+	let c = floor( q );
+	let f = fract( q );
+	var slope = vec2f( 0.0 );
+	for ( var j = -1; j <= 1; j++ ) {
+		for ( var i = -1; i <= 1; i++ ) {
+			let cell = c + vec2f( f32( i ), f32( j ) );
+			let h = vec2f(
+				fract( sin( dot( cell + seed, vec2f( 127.1, 311.7 ) ) ) * 43758.5453 ),
+				fract( sin( dot( cell + seed, vec2f( 269.5, 183.3 ) ) ) * 43758.5453 )
+			);
+			let cycle = t * rate + h.x * 7.3 + h.y * 3.1;
+			let age = fract( cycle );
+			let gen = floor( cycle );
+			let h2 = vec2f(
+				fract( sin( dot( cell + gen * 0.13 + seed, vec2f( 41.7, 93.1 ) ) ) * 23421.631 ),
+				fract( sin( dot( cell + gen * 0.27 + seed, vec2f( 73.3, 19.9 ) ) ) * 19432.517 )
+			);
+			let pos = vec2f( f32( i ), f32( j ) ) + 0.2 + h2 * 0.6;
+			let dVec = f - pos;
+			let d = length( dVec );
+			let radius = age * 0.48;
+			let ring = d - radius;
+			let env = exp( - ring * ring * 180.0 ) * ( 1.0 - age ) * smoothstep( 0.0, 0.08, age );
+			let wave = sin( ring * 44.0 );
+			let dir = dVec / max( d, 1e-4 );
+			slope += dir * ( wave * env );
+		}
+	}
+	return slope;
+}
+fn waterRainRipples( xz: vec2f, t: f32, rain: f32 ) -> vec2f {
+	let r1 = _waterRippleCell( xz, t, 1.8, 1.35, 0.0 );
+	let r2 = _waterRippleCell( xz + vec2f( 0.37, 0.71 ), t, 2.3, 2.25, 17.3 );
+	return ( r1 * 0.65 + r2 * 0.45 ) * ( 0.055 * rain );
 }
 `;
 

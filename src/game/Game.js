@@ -12,6 +12,7 @@ import { UPGRADES, fuelBurn } from './Gear.js';
 import { GameHUD } from './GameHUD.js';
 import { Minimap } from './Minimap.js';
 import { Guide } from './Guide.js';
+import { getLang, tr, trFish, trUpgradeName, trUpgradeLabel } from '../i18n/i18n.js';
 
 // how long the catch card stays up unless dismissed (ms)
 const CATCH_CARD_MS = 9000;
@@ -71,6 +72,15 @@ export class Game {
 		}
 
 		for ( const f of this.floods || [] ) f.scale = g.deckLights ? 1 : 0;
+		if ( this.app.vehicleManager ) {
+
+			for ( const vh of this.app.vehicleManager.vehicles ) {
+
+				if ( typeof vh.applyUpgrades === 'function' ) vh.applyUpgrades( g );
+
+			}
+
+		}
 
 	}
 
@@ -105,7 +115,7 @@ export class Game {
 	buy( key ) {
 
 		const r = this.state.buy( key );
-		if ( r ) this.toast( `${ UPGRADES[ key ].name }: ${ r.label }` );
+		if ( r ) this.toast( `${ trUpgradeName( key, UPGRADES[ key ].name ) }: ${ trUpgradeLabel( key, r.index, r.label ) }` );
 		return r;
 
 	}
@@ -116,7 +126,7 @@ export class Game {
 		if ( l > 0 ) {
 
 			this._fuelOut = false;
-			this.toast( `Filled up · ${ l.toFixed( 0 ) } L` );
+			this.toast( getLang() === 'zh' ? `已加满柴油 · ${ l.toFixed( 0 ) } L` : `Filled up · ${ l.toFixed( 0 ) } L` );
 
 		}
 
@@ -154,12 +164,18 @@ export class Game {
 
 		}
 
+		const ui = app.ui && app.ui.ui;
+		const photo = !! ( ui && ui._photo );
+		const uiBlocked = !! ( ui && ( ui._start || ui._help ) );
+		const guideOpen = !! ( this.guide && this.guide.open );
+		const panelOpen = ( this.hud && ( this.hud.invOpen || this.hud.standOpen ) ) || ( this.minimap && this.minimap.fullOpen );
+
 		const can = this.canFish;
-		if ( inp.hit( 'KeyR' ) && can && ! this.fight ) {
+		if ( inp.hit( 'KeyR' ) && can && ! this.fight && ! panelOpen && ! uiBlocked && ! guideOpen ) {
 
 			rod.equip( ! rod.equipped );
 			if ( ! rod.equipped ) this.cancelLine();
-			this.toast( rod.equipped ? 'Rod out · hold left mouse to cast' : 'Rod away', 1600 );
+			this.toast( tr( rod.equipped ? 'Rod out · hold left mouse to cast' : 'Rod away' ), 1600 );
 
 		}
 
@@ -171,22 +187,44 @@ export class Game {
 
 		}
 
-		if ( this.hud && ( inp.hit( 'KeyI' ) || inp.hit( 'Tab' ) ) ) this.hud.toggleInventory();
-		if ( this.hud && inp.hit( 'Escape' ) ) {
+		if ( photo && this.hud ) {
 
-			this.hud.toggleInventory( false );
-			this.hud.closeStand();
+			if ( this.hud.invOpen ) this.hud.toggleInventory( false );
+			if ( this.hud.standOpen ) this.hud.closeStand();
 
 		}
 
-		// mouse edges (the left button also looks around while the pointer isn't captured)
-		const lmb = inp.mouseDown && inp.enabled, rmb = inp.rightDown && inp.enabled;
+		if ( ! uiBlocked && ! photo && ! guideOpen ) {
+
+			if ( this.hud && ( inp.hit( 'KeyI' ) || inp.hit( 'Tab' ) ) ) this.hud.toggleInventory();
+			if ( this.minimap && inp.hit( 'KeyN' ) ) this.minimap.toggleFull();
+
+		}
+
+		if ( photo && this.minimap && this.minimap.fullOpen ) this.minimap.toggleFull( false );
+		if ( inp.hit( 'Escape' ) ) {
+
+			if ( this.hud ) {
+
+				this.hud.toggleInventory( false );
+				this.hud.closeStand();
+
+			}
+
+			if ( this.minimap ) this.minimap.toggleFull( false );
+
+		}
+
+		// mouse edges (plus gamepad RT to cast/reel and B to cancel line when rod is out)
+		const gpCast = rod.equipped && inp.gp && inp.gp.connected && inp.gp.rt > 0.35;
+		const gpReelEmpty = rod.equipped && inp.gpDown && inp.gpDown( 1 );
+		const lmb = ( inp.mouseDown || gpCast ) && inp.enabled, rmb = ( inp.rightDown || gpReelEmpty ) && inp.enabled;
 		const lDown = lmb && ! this._lmb, lUp = ! lmb && this._lmb, rDown = rmb && ! this._rmb;
 		this._lmb = lmb;
 		this._rmb = rmb;
-		const panelOpen = this.hud && ( this.hud.invOpen || this.hud.standOpen );
+		const modalNow = ( this.hud && ( this.hud.invOpen || this.hud.standOpen ) ) || ( this.minimap && this.minimap.fullOpen ) || uiBlocked || guideOpen || photo;
 
-		if ( rod.equipped && ! panelOpen ) {
+		if ( rod.equipped && ! modalNow ) {
 
 			if ( rod.state === 'idle' && lDown ) rod.startWindup();
 			else if ( rod.state === 'windup' && lUp ) rod.release();
@@ -325,7 +363,7 @@ export class Game {
 			if ( left <= 0 ) {
 
 				b.throttle = 0;
-				if ( ! this._fuelOut ) this.toast( 'Out of fuel · buy diesel at the chandlery by the boathouse', 4000 );
+				if ( ! this._fuelOut ) this.toast( tr( 'Out of fuel · buy diesel at the chandlery by the boathouse' ), 4000 );
 				this._fuelOut = true;
 
 			}
@@ -377,7 +415,7 @@ export class Game {
 	sellAll() {
 
 		const r = this.state.sell();
-		if ( r.count ) this.toast( `Sold ${ r.count } fish for $${ r.total }` );
+		if ( r.count ) this.toast( getLang() === 'zh' ? `售出 ${ r.count } 条渔获，获得 $${ r.total }` : `Sold ${ r.count } fish for $${ r.total }` );
 		if ( this.app.audio && this.app.audio.coin ) this.app.audio.coin();
 		return r;
 
@@ -386,7 +424,7 @@ export class Game {
 	sell( ids ) {
 
 		const r = this.state.sell( ids );
-		if ( r.count ) this.toast( `Sold for $${ r.total }` );
+		if ( r.count ) this.toast( getLang() === 'zh' ? `已售出，获得 $${ r.total }` : `Sold for $${ r.total }` );
 		return r;
 
 	}
@@ -421,12 +459,13 @@ export class Game {
 
 		if ( where !== 'water' ) {
 
-			this.toast( 'Landed on the sand', 1400 );
+			this.toast( tr( 'Landed on the sand' ), 1400 );
 			return;
 
 		}
 
-		this.bite = { phase: 'wait', t: biteDelay( this.habitat(), this.hour ) };
+		const w = this.app.weather ? this.app.weather.getGameplayState() : null;
+		this.bite = { phase: 'wait', t: biteDelay( this.habitat(), this.hour, Math.random, w ) };
 
 	}
 
@@ -446,7 +485,8 @@ export class Game {
 		if ( b.phase === 'wait' ) {
 
 			const h = this.habitat();
-			const species = pickSpecies( h, this.hour );
+			const w = this.app.weather ? this.app.weather.getGameplayState() : null;
+			const species = pickSpecies( h, this.hour, Math.random, w );
 			if ( ! species ) {
 
 				b.t = 8;
@@ -477,8 +517,9 @@ export class Game {
 
 		} else if ( b.phase === 'take' ) {
 
-			this.toast( 'It took the bait and ran', 1800 );
-			this.bite = { phase: 'wait', t: biteDelay( this.habitat(), this.hour ) };
+			this.toast( tr( 'It took the bait and ran' ), 1800 );
+			const w = this.app.weather ? this.app.weather.getGameplayState() : null;
+			this.bite = { phase: 'wait', t: biteDelay( this.habitat(), this.hour, Math.random, w ) };
 
 		}
 
@@ -490,7 +531,7 @@ export class Game {
 		if ( ! b || b.phase === 'wait' || b.phase === 'nibble' ) {
 
 			// too early: a nibbling fish isn't hooked yet; it keeps nibbling (a hint, no penalty)
-			if ( b && b.phase === 'nibble' ) this.toast( 'Not yet · wait for it to pull under', 1500 );
+			if ( b && b.phase === 'nibble' ) this.toast( tr( 'Not yet · wait for it to pull under' ), 1500 );
 			return;
 
 		}
@@ -499,7 +540,7 @@ export class Game {
 		this.fight = new CatchMinigame( { species: b.species, kg: b.kg, lineKg: g.lineKg, reelSpeed: g.reelSpeed, distance: Math.max( 3, this.rod.lineOut ) } );
 		this.bite = null;
 		this.rod.hook();
-		this.toast( 'Fish on!', 1200 );
+		this.toast( tr( 'Fish on!' ), 1200 );
 
 	}
 
@@ -514,7 +555,7 @@ export class Game {
 		if ( st === 'fighting' ) return;
 		this.fight = null;
 		this.rod.dip = 0;
-		const name = FISH[ f.species ].name;
+		const name = trFish( f.species, FISH[ f.species ].name );
 		if ( st === 'caught' ) {
 
 			const entry = this.state.addFish( f.species, f.kg, this.hour );
@@ -525,8 +566,15 @@ export class Game {
 			if ( this.hud ) this.landing = { species: f.species, kg: f.kg, card: info, cardT: 0 };
 			else {
 
-				if ( entry ) this.toast( `${ info.record ? 'New record! ' : '' }${ name } · ${ entry.kg.toFixed( 2 ) } kg · $${ entry.value }`, 3600 );
-				else this.toast( `${ name } · ${ f.kg.toFixed( 1 ) } kg · no room in the ${ this.state.upgrades.hold > 0 ? 'hold' : 'cooler' }, let it go`, 3600 );
+				if ( entry ) this.toast( `${ info.record ? ( getLang() === 'zh' ? '新纪录！' : 'New record! ' ) : '' }${ name } · ${ entry.kg.toFixed( 2 ) } kg · $${ entry.value }`, 3600 );
+				else {
+
+					const fullMsg = getLang() === 'zh'
+						? `${ name } · ${ f.kg.toFixed( 1 ) } kg · ${ this.state.upgrades.hold > 0 ? '鱼舱' : '冰桶' }已满，只好放生`
+						: `${ name } · ${ f.kg.toFixed( 1 ) } kg · no room in the ${ this.state.upgrades.hold > 0 ? 'hold' : 'cooler' }, let it go`;
+					this.toast( fullMsg, 3600 );
+
+				}
 				this.landing = { species: f.species, kg: f.kg };
 
 			}
@@ -535,13 +583,13 @@ export class Game {
 
 		} else if ( st === 'snapped' ) {
 
-			this.toast( 'Snap! The line broke', 2400 );
+			this.toast( tr( 'Snap! The line broke' ), 2400 );
 			if ( au && au.lineSnap ) au.lineSnap();
 			this.rod.setState( 'idle' );
 
 		} else {
 
-			this.toast( 'It threw the hook', 2000 );
+			this.toast( tr( 'It threw the hook' ), 2000 );
 			this.rod.endFight();
 
 		}
@@ -561,7 +609,7 @@ export class Game {
 	// line in at once (mode change)
 	cancelLine( silent = false ) {
 
-		if ( this.fight && ! silent ) this.toast( 'Lost it', 1400 );
+		if ( this.fight && ! silent ) this.toast( tr( 'Lost it' ), 1400 );
 		this.fight = null;
 		this.bite = null;
 		if ( this.rod.state !== 'stowed' ) this.rod.setState( this.rod.equipped ? 'idle' : 'stowed' );

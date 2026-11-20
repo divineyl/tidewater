@@ -58,6 +58,8 @@ const FRAME_FIELDS = {
 	pad0: [ 'f32', 0 ],
 	// free slots for experiments / debug views
 	debug: [ 'vec4f', new Vector4() ],
+	// x = rainIntensity (0..1), y = surfaceWetness (0..1), z = stormIntensity (0..1), w = lightningFlash (0..1+)
+	weather: [ 'vec4f', new Vector4() ],
 };
 
 const CAMERA_FIELDS = [ 'view', 'proj', 'viewProj', 'invView', 'invProj', 'invViewProj', 'viewProjNoJitter', 'prevViewProjNoJitter',
@@ -103,6 +105,7 @@ export const G = {
 	windSpeed: F.windSpeed,
 	night: F.night,
 	envIntensity: F.envIntensity,
+	weather: F.weather,
 };
 
 export const GRAVITY = 9.81;

@@ -199,6 +199,7 @@ fn main( @builtin( global_invocation_id ) gid: vec3u ) {
 
 	setShoreField( f ) {
 
+		this.shoreField = f;
 		this.shoreRes = f.res;
 		if ( this.shoreTexture.width !== f.res ) {
 

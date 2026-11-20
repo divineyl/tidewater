@@ -45,6 +45,26 @@ export const UPGRADES = {
 		{ cost: 0, label: 'Nav lights only', deckLights: false },
 		{ cost: 140, label: 'Deck floodlights for night fishing', deckLights: true },
 	] },
+	// land vehicles (Motorcycle & Coastal Buggy)
+	vehTires: { name: 'Off-road tires', levels: [
+		{ cost: 0, label: 'Stock coastal tires', vehGripMul: 1.0, vehSandDragMul: 1.0, vehWetGripBonus: 0 },
+		{ cost: 110, label: 'Knobby dune tires', vehGripMul: 1.12, vehSandDragMul: 0.72, vehWetGripBonus: 0.08 },
+		{ cost: 290, label: 'Pro Baja mud-terrain tires', vehGripMul: 1.24, vehSandDragMul: 0.45, vehWetGripBonus: 0.16 },
+	] },
+	vehEngine: { name: 'Land powertrain', levels: [
+		{ cost: 0, label: 'Factory engine', vehPowerMul: 1.0, vehSpeedBonusKmh: 0 },
+		{ cost: 180, label: 'High-flow intake & exhaust', vehPowerMul: 1.18, vehSpeedBonusKmh: 12 },
+		{ cost: 420, label: 'Turbocharged coastal tune', vehPowerMul: 1.38, vehSpeedBonusKmh: 26 },
+	] },
+	vehSuspension: { name: 'Suspension & snorkel', levels: [
+		{ cost: 0, label: 'Factory springs', vehClimbMul: 1.0, vehWadeDepthBonus: 0 },
+		{ cost: 150, label: 'Long-travel coilovers', vehClimbMul: 1.25, vehWadeDepthBonus: 0.25 },
+		{ cost: 360, label: 'Rally bypass shocks + snorkel', vehClimbMul: 1.50, vehWadeDepthBonus: 0.55 },
+	] },
+	vehLights: { name: 'LED light bar', levels: [
+		{ cost: 0, label: 'Standard halogen beam', vehLightMul: 1.0, vehLightRangeMul: 1.0 },
+		{ cost: 130, label: 'Dual Rally LED light bar', vehLightMul: 1.65, vehLightRangeMul: 1.55 },
+	] },
 };
 
 export const FUEL_PRICE = 1.5; // $ per litre of diesel at the chandlery

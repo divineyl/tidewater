@@ -1,5 +1,6 @@
 import { STAND } from './FishStand.js';
 import { CHANDLERY } from './Chandlery.js';
+import { getLang, onLangChange, trCompass, ZH_GUIDE_CARDS, ZH_GUIDE_TIPS } from '../i18n/i18n.js';
 
 // First-play guide:
 //  - an intro (3 cards) the first time the game starts, after the start overlay: the goal, the fishing
@@ -144,14 +145,16 @@ export class Guide {
 		this.el = h( 'div', 'gm-guide tw-interactive', `<div class="gm-guide-card tw-glass" role="dialog" aria-modal="true" aria-live="polite">
 			<div class="gm-guide-eyebrow"></div><h2></h2><div class="gm-guide-body"></div>
 			<div class="gm-guide-foot"><div class="gm-guide-dots">${ CARDS.map( () => '<span></span>' ).join( '' ) }</div>
-			<div class="gm-guide-btns"><span class="gm-guide-hint">Enter · Esc to skip</span><button type="button" class="gm-btn is-ghost gm-guide-skip">Skip</button><button type="button" class="gm-btn gm-guide-next">Next</button></div></div></div>` );
+			<div class="gm-guide-btns"><span class="gm-guide-hint"></span><button type="button" class="gm-btn is-ghost gm-guide-skip"></button><button type="button" class="gm-btn gm-guide-next"></button></div></div></div>` );
 		this.card = this.el.firstChild;
 		this.eyebrow = this.el.querySelector( '.gm-guide-eyebrow' );
 		this.title = this.el.querySelector( 'h2' );
 		this.body = this.el.querySelector( '.gm-guide-body' );
 		this.dots = [ ...this.el.querySelectorAll( '.gm-guide-dots span' ) ];
+		this.hintEl = this.el.querySelector( '.gm-guide-hint' );
+		this.skipBtn = this.el.querySelector( '.gm-guide-skip' );
 		this.nextBtn = this.el.querySelector( '.gm-guide-next' );
-		this.el.querySelector( '.gm-guide-skip' ).addEventListener( 'click', ( e ) => {
+		this.skipBtn.addEventListener( 'click', ( e ) => {
 
 			e.stopPropagation();
 			this.close();
@@ -166,8 +169,22 @@ export class Guide {
 		ui.root.append( this.el );
 
 		this.coach = h( 'div', 'gm-coach tw-glass', '<span class="gm-coach-eyebrow">Tip</span><span class="gm-coach-text"></span>' );
+		this.coachEyebrow = this.coach.firstChild;
 		this.coachText = this.coach.lastChild;
 		( ui.hud || ui.root ).append( this.coach );
+		this._syncStaticLabels();
+		onLangChange( () => {
+
+			this._syncStaticLabels();
+			if ( this.open ) this.show( this.step );
+			if ( this._current ) {
+
+				const tips = getLang() === 'zh' ? ZH_GUIDE_TIPS : TIPS;
+				this.coachText.innerHTML = tips[ this._current ] || TIPS[ this._current ];
+
+			}
+
+		} );
 
 		this.open = false;
 		this.step = 0;
@@ -229,17 +246,28 @@ export class Guide {
 
 	}
 
+	_syncStaticLabels() {
+
+		const zh = getLang() === 'zh';
+		this.hintEl.textContent = zh ? 'Enter 下一步 · Esc 跳过' : 'Enter · Esc to skip';
+		this.skipBtn.textContent = zh ? '跳过' : 'Skip';
+		this.coachEyebrow.textContent = zh ? '贴士' : 'Tip';
+
+	}
+
 	// ---- intro
 	show( i ) {
 
 		this.step = i;
-		const c = CARDS[ i ];
+		const zh = getLang() === 'zh';
+		const cards = zh ? ZH_GUIDE_CARDS : CARDS;
+		const c = cards[ i ] || CARDS[ i ];
 		this.eyebrow.textContent = c.eyebrow;
 		this.title.textContent = c.title;
 		this.body.innerHTML = c.body;
 		this.dots.forEach( ( d, j ) => d.classList.toggle( 'is-on', j === i ) );
-		this.nextBtn.textContent = i === CARDS.length - 1 ? 'Let\'s fish' : 'Next';
-		if ( this.minimap ) this.minimap.highlight( i === CARDS.length - 1 ? [ 'joe', 'marta' ] : [] );
+		this.nextBtn.textContent = i === cards.length - 1 ? ( zh ? '出发钓鱼' : 'Let\'s fish' ) : ( zh ? '下一步' : 'Next' );
+		if ( this.minimap ) this.minimap.highlight( i === cards.length - 1 ? [ 'joe', 'marta' ] : [] );
 		this._whereT = 0;
 		if ( ! this.open ) {
 
@@ -317,7 +345,7 @@ export class Guide {
 				for ( const [ id, t ] of [ [ 'joe', STAND ], [ 'marta', CHANDLERY ] ] ) {
 
 					const el = this.body.querySelector( `[data-where="${ id }"]` );
-					if ( el ) el.textContent = `${ Math.round( Math.hypot( t.x - x, t.z - z ) ) } m ${ compassWord( x, z, t.x, t.z ) }`;
+					if ( el ) el.textContent = `${ Math.round( Math.hypot( t.x - x, t.z - z ) ) } m ${ trCompass( compassWord( x, z, t.x, t.z ) ) }`;
 
 				}
 
@@ -368,7 +396,8 @@ export class Guide {
 			this._current = id;
 			this.seen[ id ] = true;
 			this._save();
-			this.coachText.innerHTML = TIPS[ id ];
+			const tips = getLang() === 'zh' ? ZH_GUIDE_TIPS : TIPS;
+			this.coachText.innerHTML = tips[ id ] || TIPS[ id ];
 			this.coach.classList.add( 'is-on' );
 			this._coachT = 7.5;
 

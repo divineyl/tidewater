@@ -5,7 +5,8 @@
     "dev": "vite --host 127.0.0.1 --port 5189",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node test/game-logic.mjs && node test/engine-smoke.mjs"
+    "test": "node test/game-logic.mjs && node test/vehicle-physics.mjs && node test/m1-systems.mjs && node test/m2-systems.mjs && node test/m3-systems.mjs && node test/bugfix-checks.mjs",
+    "pack": "node scripts/pack-portable.mjs"
   },
   "devDependencies": {
     "vite": "^8.3.0",

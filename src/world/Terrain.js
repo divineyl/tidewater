@@ -30,10 +30,11 @@ export class Terrain {
 	// sunShadow: apply the heightfield sun shadow here (pass false if it is applied to every scene
 	// material through SceneLighting.directModulation). renderer: optional (unused: the sun shadow
 	// map is baked from update() into the frame encoder).
-	constructor( { scene, terrainData, terrainGPU, gridSize = 40, rangeFactor = 2.0, sunShadow = true, renderer = null } ) {
+	constructor( { scene, terrainData, terrainGPU, gridSize = 40, rangeFactor = 2.0, sunShadow = true, renderer = null, groundInteraction = null } ) {
 
 		this.data = terrainData;
 		this.gpu = terrainGPU;
+		this.groundInteraction = groundInteraction;
 		const half = terrainData.size / 2;
 
 		this.lod = new CDLOD( {
@@ -96,6 +97,7 @@ export class Terrain {
 
 		const mat = this.material;
 		const modules = [ this.gpu.module, terrainShadingModule(), this.lod.module ];
+		if ( this.groundInteraction ) modules.push( this.groundInteraction.module );
 		if ( this.wetness ) {
 
 			modules.push( ...( this.wetness.modules || [] ) );
@@ -106,6 +108,7 @@ export class Terrain {
 		modules.push( new ShaderModule( { name: 'terrainMaterial', deps: [ this.gpu.module, terrainShadingModule() ], code: TERRAIN_MATERIAL_WGSL } ) );
 		mat.modules = modules;
 		mat.defines.HAS_WETNESS = this.wetness ? 1 : 0;
+		mat.defines.HAS_GROUND_INTERACTION = this.groundInteraction ? 1 : 0;
 		mat.defines.MATERIAL_SUN_MODULATION = this.sunShadow ? 1 : 0;
 		mat.surface = TERRAIN_SURFACE;
 		mat.needsUpdate = true;
@@ -152,17 +155,44 @@ fn terGustAt( xz: vec2f, offset: vec2f ) -> f32 {
 	return smoothstep( 0.46, 0.6, n );
 }
 
-// ---- wetness (swash zone) from the shore system, else a static damp band
+// ---- wetness (swash zone + rain wetness)
 fn terWetFoam( xz: vec2f, h: f32 ) -> vec2f {
 #if HAS_WETNESS
-	return terrainWetness( xz, h );
+	let s = terrainWetness( xz, h );
+	return vec2f( max( s.x, frame.weather.y * 0.9 ), s.y );
 #else
-	return vec2f( smoothstep( 0.5, 0.0, h ), 0.0 );
+	return vec2f( max( smoothstep( 0.5, 0.0, h ), frame.weather.y * 0.9 ), 0.0 );
 #endif
 }
 
 fn terDetail( uv: vec2f ) -> vec4f {
 	return textureSample( terrainDetailTex, smpAniso4Repeat, uv );
+}
+
+fn terHash22( q: vec2f ) -> vec2f {
+	let p3 = fract( vec3f( q.xyx ) * vec3f( 0.1031, 0.1030, 0.0973 ) );
+	let p3b = p3 + dot( p3, p3.yzx + 33.33 );
+	return fract( ( p3b.xx + p3b.yz ) * p3b.zy );
+}
+
+fn terRippleLayer( q: vec2f, tm: f32 ) -> f32 {
+	let cell = floor( q );
+	let fracP = fract( q );
+	let rnd = terHash22( cell );
+	let center = 0.2 + 0.6 * rnd;
+	let phase = fract( tm * 1.15 + rnd.x * 1.7 + rnd.y * 3.1 );
+	let dist = length( fracP - center );
+	let ringR = phase * 0.48;
+	let band = exp( - pow( ( dist - ringR ) * 22.0, 2.0 ) );
+	let wave = sin( ( dist - ringR ) * 52.0 );
+	let life = ( 1.0 - phase ) * ( 1.0 - phase ) * smoothstep( 0.0, 0.08, phase );
+	return wave * band * life;
+}
+
+fn terRainRipples( xz: vec2f, tm: f32 ) -> f32 {
+	let l1 = terRippleLayer( xz * 1.35, tm );
+	let l2 = terRippleLayer( xz * 1.95 + vec2f( 17.3, - 11.7 ), tm * 1.12 + 0.37 );
+	return l1 * 0.6 + l2 * 0.4;
 }
 `;
 
@@ -566,6 +596,10 @@ const TERRAIN_SURFACE = /* wgsl */`
 		if ( rillK > 0.0 ) { rill = terDetail( vec2f( dot( xz, slopeDir ) / 3.2, dot( xz, vec2f( -slopeDir.y, slopeDir.x ) ) / 0.3 ) ).w; }
 		let wetAlbedo = terrainSaturation( albedo * mat.wetDarken, 1.15 ) * vec3f( 0.97, 0.98, 1.0 ) * ( ( rill - 0.5 ) * 0.25 * rillK + 1.0 );
 		albedo = mix( albedo, wetAlbedo, wetK );
+		// rain wetness across rocks and forest ground
+		let rainWet = frame.weather.y * landW;
+		albedo = mix( albedo, albedo * mix( 1.0, 0.66, rainWet * 0.85 ), rockW );
+		albedo = mix( albedo, albedo * 0.78, jungleW * rainWet * 0.65 );
 		// swash marks: thin wavy lines of grit left at the limits of earlier uprushes
 		let sl = ( h + dM.w * 0.18 + dN.w * 0.05 ) / 0.13;
 		let slD = abs( fract( sl ) - 0.5 );
@@ -578,15 +612,40 @@ const TERRAIN_SURFACE = /* wgsl */`
 		if ( residue > 0.0 ) { residue *= smoothstep( 0.42, 0.18, terDetail( ${ rot2( 'xz', 0.4 ) } / 0.9 ).x ) * 0.7 + 0.3; }
 		albedo = mix( albedo, ${ S( 0.88, 0.9, 0.9 ) }, residue );
 
+		// ---- vehicle tire tracks & dynamic rain puddles
+		var track = 0.0;
+#if HAS_GROUND_INTERACTION
+		let giSamp = groundInteractionAt( xz );
+		let trackRaw = giSamp.y * landW * ( 1.0 - rockW * 0.85 ) * ( 1.0 - underW );
+		track = sat( trackRaw * ( 0.72 + 0.28 * dF.x ) );
+		if ( track > 0.005 ) {
+			albedo = mix( albedo, albedo * mix( 0.60, 0.46, rainWet ), track * 0.85 );
+		}
+#endif
+		let rainNow = frame.weather.x;
+		let puddleWet = smoothstep( 0.16, 0.76, frame.weather.y ) * landW * ( 1.0 - underW );
+		let flatM = smoothstep( 0.15, 0.025, slope ) * smoothstep( 0.45, 1.35, h ) * ( 1.0 - rockW * 0.75 ) * ( 1.0 - scarpW );
+		let basinN = dM.w * 0.55 + macroB * 0.30 + dN.w * 0.15;
+		let puddleField = basinN + pathW * 0.20 + track * 0.34 - sandW * 0.14;
+		let puddleThresh = mix( 0.84, 0.50, puddleWet );
+		let puddle = smoothstep( puddleThresh, puddleThresh + 0.11, puddleField ) * flatM * smoothstep( 0.0, 0.22, puddleWet );
+		if ( puddle > 0.005 ) {
+			albedo = mix( albedo, terrainSaturation( albedo * 0.54, 1.16 ), puddle * 0.86 );
+		}
+
 		// ---- roughness
 		var rough = mix( 0.88, 0.93, sandW );
 		rough = mix( rough, 0.9, pathW );
 		rough = mix( rough, rockRough, rockW );
 		// wet sand has a film of water: glossy while fresh, satin as it drains
 		rough = mix( rough, mix( 0.42, 0.16, wet ), wetK );
+		rough = mix( rough, mix( rough, 0.18, rainWet * 0.85 ), rockW );
+		rough = mix( rough, mix( rough, 0.35, rainWet * 0.65 ), ( 1.0 - rockW ) * landW * ( 1.0 - wetK ) );
 		rough = mix( rough, 0.7, residue );
 		rough = mix( rough, 0.75, underW );
 		rough = mix( rough, 0.94, scarpW );
+		rough = mix( rough, mix( 0.60, 0.14, rainWet ), track * 0.75 );
+		rough = mix( rough, 0.045, puddle );
 		outRough = rough;
 
 		// ---- micro relief for the normal
@@ -605,6 +664,11 @@ const TERRAIN_SURFACE = /* wgsl */`
 		hd = mix( hd, sandH + seabedH, max( sandW, underW * notRock ) );
 		hd = mix( hd, rockHd, rockW );
 		hd = mix( hd, scarpH, scarpW );
+		hd -= track * 0.028 * ( 1.0 - sandW * 0.2 );
+		hd = mix( hd, 0.0, puddle * 0.94 );
+		if ( puddle > 0.02 && rainNow > 0.03 ) {
+			hd += terRainRipples( xz, frame.time ) * rainNow * puddle * 0.0045;
+		}
 		hdOut = hd;
 
 		// ---- ambient occlusion: baked horizon + cavity, plus litter / crevices / seagrass canopy

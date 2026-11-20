@@ -651,7 +651,7 @@ export function buildGrassMask( site ) {
 	for ( let j = 1; j < res - 1; j ++ ) {
 
 		const z = t.origin + ( j + 0.5 ) * texel;
-		if ( z > 0 || z < - 950 ) continue;
+		if ( z > 200 || z < - 950 ) continue;
 		for ( let i = 1; i < res - 1; i ++ ) {
 
 			const k = j * res + i;

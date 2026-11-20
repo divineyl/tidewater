@@ -34,7 +34,7 @@ const HELM_REACH = 0.75; // m from the helm seat to take the wheel
 //   boat : at the helm, driving; V toggles helm (1st person) / chase (3rd person) camera, E stands up
 export class Player {
 
-	constructor( { camera, input, terrain, colliders, query, boat, reef = null, audio = null } ) {
+	constructor( { camera, input, terrain, colliders, query, boat, vehicles = null, reef = null, audio = null } ) {
 
 		this.camera = camera;
 		this.input = input;
@@ -42,6 +42,7 @@ export class Player {
 		this.colliders = colliders;
 		this.query = query;
 		this.boat = boat;
+		this.vehicles = vehicles;
 		this.reef = reef;
 		this.audio = audio;
 
@@ -69,6 +70,18 @@ export class Player {
 		this.prompt = null;
 		this.surface = 'sand';
 
+		// vehicle cameras
+		this.activeVehicle = null;
+		this.vehOrbitYaw = 0;
+		this.vehOrbitPitch = 0.22;
+		this.vehOrbitDist = 4.6;
+		this.vehHeadYaw = 0;
+		this.vehHeadPitch = - 0.05;
+		this.vehCamPos = new THREE.Vector3();
+		this.vehCamInit = false;
+		this.vehFovDelta = 0;
+		this._vehLookHoldT = 0;
+
 		// boat cameras
 		this.orbitYaw = 0;
 		this.orbitPitch = 0.22;
@@ -77,6 +90,7 @@ export class Player {
 		this.helmPitch = - 0.05;
 		this.camPos = new THREE.Vector3();
 		this.camInit = false;
+		this._boatLookHoldT = 0;
 		this.wasUnder = false;
 
 		// on deck: position and heading in the boat frame (+Z forward, yaw 0 looks forward)
@@ -153,18 +167,44 @@ export class Player {
 
 		}
 
+		if ( this.mode === 'vehicle' ) {
+
+			this.updateVehicle( dt );
+			return;
+
+		}
+
 		const look = inp.consumeLook();
 		this.yaw -= look.x * 0.0022;
 		this.pitch = THREE.MathUtils.clamp( this.pitch - look.y * 0.0022, - 1.5, 1.5 );
 
 		// (not with a line out or a fish in hand: E belongs to the fishing then)
-		if ( this.nearBoat() && ! this.busy ) {
+		if ( ! this.busy ) {
 
-			this.prompt = { key: 'E', text: 'Board boat' };
-			if ( inp.hit( 'KeyE' ) ) {
+			const hasBoat = this.nearBoat();
+			const boatD = hasBoat ? Math.hypot( _v.x - this.position.x, _v.z - this.position.z ) : Infinity;
+			const nv = this.vehicles ? this.vehicles.getNearestMountable( this.position ) : null;
+			const vehD = nv ? Math.hypot( nv.position.x - this.position.x, nv.position.z - this.position.z ) : Infinity;
 
-				this.boardBoat();
-				return;
+			if ( hasBoat && ( ! nv || boatD <= vehD ) ) {
+
+				this.prompt = { key: 'E', text: 'Board boat' };
+				if ( inp.hit( 'KeyE' ) ) {
+
+					this.boardBoat();
+					return;
+
+				}
+
+			} else if ( nv ) {
+
+				this.prompt = { key: 'E', text: `Ride ${ nv.name.toLowerCase() }` };
+				if ( inp.hit( 'KeyE' ) ) {
+
+					this.mountVehicle( nv );
+					return;
+
+				}
 
 			}
 
@@ -207,11 +247,11 @@ export class Player {
 		_fwd.set( - Math.sin( this.yaw ), 0, - Math.cos( this.yaw ) );
 		_right.set( - _fwd.z, 0, _fwd.x );
 		const wish = new THREE.Vector3();
-		if ( inp.down( 'KeyW' ) ) wish.add( _fwd );
-		if ( inp.down( 'KeyS' ) ) wish.sub( _fwd );
-		if ( inp.down( 'KeyD' ) ) wish.add( _right );
-		if ( inp.down( 'KeyA' ) ) wish.sub( _right );
-		if ( wish.lengthSq() > 0 ) wish.normalize();
+		const move = inp.getMoveAxes();
+		wish.addScaledVector( _fwd, move.y );
+		wish.addScaledVector( _right, move.x );
+		const mag = wish.length();
+		if ( mag > 1 ) wish.multiplyScalar( 1 / mag );
 
 		const depth = this.waterH - this.position.y; // water depth at the feet
 		const wade = THREE.MathUtils.clamp( depth / 1.2, 0, 1 );
@@ -238,6 +278,26 @@ export class Player {
 		const old = p.clone();
 		p.addScaledVector( this.velocity, dt );
 		this.colliders.resolveCapsule( p, RADIUS, HEIGHT, 0.4 );
+		if ( this.vehicles ) {
+
+			for ( const vh of this.vehicles.vehicles ) {
+
+				if ( vh.occupied || Math.abs( p.y - vh.position.y ) > 1.5 ) continue;
+				const dx = p.x - vh.position.x;
+				const dz = p.z - vh.position.z;
+				const minR = RADIUS + ( vh.colliderRadius || 0.52 );
+				const d2 = dx * dx + dz * dz;
+				if ( d2 < minR * minR && d2 > 1e-6 ) {
+
+					const d = Math.sqrt( d2 );
+					p.x = vh.position.x + ( dx / d ) * minR;
+					p.z = vh.position.z + ( dz / d ) * minR;
+
+				}
+
+			}
+
+		}
 		const g = this.groundAt( p.x, p.z, p.y + 0.45 );
 		if ( p.y <= g ) {
 
@@ -305,13 +365,13 @@ export class Player {
 		_fwd.set( 0, 0, - 1 ).applyEuler( _e.set( this.pitch, this.yaw, 0 ) );
 		_right.set( - Math.cos( this.yaw ), 0, Math.sin( this.yaw ) ).negate();
 		const wish = new THREE.Vector3();
-		if ( inp.down( 'KeyW' ) ) wish.add( _fwd );
-		if ( inp.down( 'KeyS' ) ) wish.sub( _fwd );
-		if ( inp.down( 'KeyD' ) ) wish.add( _right );
-		if ( inp.down( 'KeyA' ) ) wish.sub( _right );
+		const move = inp.getMoveAxes();
+		wish.addScaledVector( _fwd, move.y );
+		wish.addScaledVector( _right, move.x );
 		if ( inp.down( 'Space' ) ) wish.y += 1;
 		if ( inp.down( 'KeyC' ) || inp.down( 'ControlLeft' ) ) wish.y -= 1;
-		if ( wish.lengthSq() > 0 ) wish.normalize();
+		const mag = wish.length();
+		if ( mag > 1 ) wish.multiplyScalar( 1 / mag );
 
 		const atSurface = this.floating && p.y > surfaceY - 0.45;
 		// at the surface W along a level view keeps you on top; looking down dives
@@ -598,11 +658,11 @@ export class Player {
 		_fwd.set( sy, 0, cy );
 		_right.set( - cy, 0, sy );
 		_wish.set( 0, 0, 0 );
-		if ( inp.down( 'KeyW' ) ) _wish.add( _fwd );
-		if ( inp.down( 'KeyS' ) ) _wish.sub( _fwd );
-		if ( inp.down( 'KeyD' ) ) _wish.add( _right );
-		if ( inp.down( 'KeyA' ) ) _wish.sub( _right );
-		if ( _wish.lengthSq() > 0 ) _wish.normalize();
+		const move = inp.getMoveAxes();
+		_wish.addScaledVector( _fwd, move.y );
+		_wish.addScaledVector( _right, move.x );
+		const wMag = _wish.length();
+		if ( wMag > 1 ) _wish.multiplyScalar( 1 / wMag );
 		const speed = ( inp.down( 'ShiftLeft' ) ? 2.6 : 1.6 );
 		const k = 1 - Math.exp( - 12 * dt );
 		const v = this.deckVel;
@@ -731,8 +791,17 @@ export class Player {
 		const b = this.boat;
 		const look = inp.consumeLook();
 		const wheel = inp.consumeWheel();
+		if ( Math.abs( look.x ) > 0.5 || Math.abs( look.y ) > 0.5 ) this._boatLookHoldT = 1.8;
+		else this._boatLookHoldT = Math.max( 0, this._boatLookHoldT - dt );
 
-		if ( inp.hit( 'KeyV' ) ) this.camMode = this.camMode === 'first' ? 'third' : 'first';
+		if ( inp.hit( 'KeyV' ) ) {
+
+			this.camMode = this.camMode === 'first' ? 'third' : 'first';
+			this.camInit = false;
+			if ( this.camMode === 'third' ) this.orbitYaw = b.getYaw() + Math.PI;
+			inp.resetLook?.();
+
+		}
 		if ( inp.hit( 'KeyE' ) ) {
 
 			this.leaveHelm();
@@ -740,12 +809,7 @@ export class Player {
 
 		}
 
-		let throttle = 0;
-		if ( inp.down( 'KeyW' ) ) throttle = inp.down( 'ShiftLeft' ) ? 1 : 0.7;
-		if ( inp.down( 'KeyS' ) ) throttle = - 0.6;
-		let steer = 0;
-		if ( inp.down( 'KeyA' ) ) steer += 1;
-		if ( inp.down( 'KeyD' ) ) steer -= 1;
+		const { throttle, steer } = inp.getBoatControls();
 		b.setInput( throttle, steer, dt );
 		this.prompt = { key: 'E', text: 'Leave helm   ·   V  camera' };
 
@@ -772,7 +836,7 @@ export class Player {
 			this.orbitPitch = THREE.MathUtils.clamp( this.orbitPitch + look.y * 0.003, - 0.05, 1.2 );
 			this.orbitDist = THREE.MathUtils.clamp( this.orbitDist * ( 1 + wheel * 0.08 ), 6, 40 );
 			// gently swing behind the boat when moving
-			if ( b.speed > 2 && Math.abs( look.x ) < 0.5 ) {
+			if ( b.speed > 2 && this._boatLookHoldT <= 0 ) {
 
 				const behind = b.getYaw() + Math.PI;
 				let d = behind - this.orbitYaw;
@@ -798,6 +862,217 @@ export class Player {
 
 			this.camPos.lerp( want, 1 - Math.exp( - dt * 6 ) );
 			this.camera.position.copy( this.camPos );
+			this.camera.lookAt( target );
+
+		}
+
+	}
+
+	// ------------------------------------------------------------------ land vehicles
+
+	clearVehicleFov() {
+
+		if ( this.vehFovDelta !== 0 ) {
+
+			this.camera.fov -= this.vehFovDelta;
+			this.vehFovDelta = 0;
+			this.camera.updateProjectionMatrix();
+
+		}
+
+	}
+
+	mountVehicle( vh ) {
+
+		if ( ! vh ) return;
+		this.activeVehicle = vh;
+		vh.mount();
+		this.mode = 'vehicle';
+		this.velocity.set( 0, 0, 0 );
+		this.vehHeadYaw = 0;
+		this.vehHeadPitch = - 0.05;
+		this.vehOrbitYaw = vh.getYaw() + Math.PI;
+		this.vehOrbitPitch = 0.22;
+		this.vehOrbitDist = vh.kind === 'buggy' ? 6.0 : 4.6;
+		this.vehCamInit = false;
+		this._camY = null;
+		if ( vh.model && vh.model.setRiderVisible ) vh.model.setRiderVisible( vh.showRider && this.camMode !== 'first' );
+
+	}
+
+	dismountVehicle() {
+
+		const vh = this.activeVehicle;
+		if ( ! vh ) {
+
+			this.mode = 'walk';
+			this.clearVehicleFov();
+			return;
+
+		}
+
+		let chosen = null;
+		for ( const off of vh.dismountOffsets || [] ) {
+
+			vh.toWorld( off, _v );
+			const g = this.groundAt( _v.x, _v.z, vh.position.y + 2.0 );
+			_v2.set( _v.x, g, _v.z );
+			const blocked = this.colliders && this.colliders.resolveCapsule( _v2, RADIUS, HEIGHT, 0.35 )
+				&& Math.hypot( _v2.x - _v.x, _v2.z - _v.z ) > 0.35;
+			if ( ! blocked && Math.abs( g - vh.position.y ) < 1.8 ) {
+
+				chosen = { x: _v2.x, y: g, z: _v2.z };
+				break;
+
+			}
+
+		}
+
+		if ( ! chosen ) {
+
+			const g = this.groundAt( vh.position.x + 0.9, vh.position.z, vh.position.y + 2.0 );
+			chosen = { x: vh.position.x + 0.9, y: g, z: vh.position.z };
+
+		}
+
+		this.position.set( chosen.x, chosen.y, chosen.z );
+		this.velocity.set( 0, 0, 0 );
+		this.yaw = vh.getYaw() + Math.PI;
+		this.pitch = - 0.05;
+		this._camY = null;
+
+		const depth = this.waterMean - chosen.y;
+		if ( depth > SWIM_DEPTH ) {
+
+			this.mode = 'swim';
+			this.position.y = Math.max( chosen.y, this.waterH - SWIM_EYE + 0.1 );
+
+		} else {
+
+			this.mode = 'walk';
+
+		}
+
+		vh.dismount();
+		if ( vh.model && vh.model.setRiderVisible ) vh.model.setRiderVisible( false );
+		this.activeVehicle = null;
+		this.clearVehicleFov();
+
+	}
+
+	updateVehicle( dt ) {
+
+		const inp = this.input;
+		const vh = this.activeVehicle;
+		if ( ! vh ) {
+
+			this.dismountVehicle();
+			return;
+
+		}
+
+		const look = inp.consumeLook();
+		const wheel = inp.consumeWheel();
+		if ( Math.abs( look.x ) > 0.5 || Math.abs( look.y ) > 0.5 ) this._vehLookHoldT = 1.8;
+		else this._vehLookHoldT = Math.max( 0, this._vehLookHoldT - dt );
+
+		if ( inp.hit( 'KeyV' ) ) {
+
+			this.camMode = this.camMode === 'first' ? 'third' : 'first';
+			this.vehCamInit = false;
+			if ( this.camMode === 'third' ) this.vehOrbitYaw = vh.getYaw() + Math.PI;
+			inp.resetLook?.();
+
+		}
+		if ( inp.hit( 'KeyE' ) ) {
+
+			this.dismountVehicle();
+			return;
+
+		}
+
+		if ( inp.hit( 'KeyR' ) ) vh.resetUpright();
+		if ( inp.hit( 'KeyG' ) && this.audio && this.audio.vehicleHorn ) this.audio.vehicleHorn( vh.kind );
+
+		vh.setInput( inp.getVehicleControls(), dt );
+
+		if ( vh.model && vh.model.setRiderVisible ) vh.model.setRiderVisible( vh.showRider && this.camMode !== 'first' );
+		this.position.copy( vh.position );
+
+		this.prompt = vh.waterStalled
+			? { key: 'R', text: vh.kind === 'motorcycle' ? 'Recover bike   ·   E  dismount' : 'Recover vehicle   ·   E  dismount' }
+			: { key: 'E', text: 'Dismount   ·   V  camera   ·   L  light' };
+
+		// Subtle speed FOV boost cleanly applied as delta so UI FOV slider remains intact
+		const wantBoost = THREE.MathUtils.clamp( vh.speed / 24, 0, 1 ) * 7.0;
+		const nextDelta = this.vehFovDelta + ( wantBoost - this.vehFovDelta ) * ( 1 - Math.exp( - dt * 6 ) );
+		if ( Math.abs( nextDelta - this.vehFovDelta ) > 0.01 ) {
+
+			this.camera.fov += nextDelta - this.vehFovDelta;
+			this.vehFovDelta = nextDelta;
+			this.camera.updateProjectionMatrix();
+
+		}
+
+		if ( this.camMode === 'first' ) {
+
+			this.vehHeadYaw = THREE.MathUtils.clamp( this.vehHeadYaw - look.x * 0.0022, - 2.1, 2.1 );
+			this.vehHeadPitch = THREE.MathUtils.clamp( this.vehHeadPitch - look.y * 0.0022, - 1.0, 0.95 );
+			if ( vh.speed > 4 && this._vehLookHoldT <= 0 ) this.vehHeadYaw *= Math.exp( - dt * 1.4 );
+
+			vh.toWorld( vh.seatEyeLocal, _v );
+			this.camera.position.copy( _v );
+
+			_qa.setFromAxisAngle( _yAxis, vh.getYaw() + Math.PI );
+			_qb.copy( vh.quaternion ).multiply( _qc.setFromAxisAngle( _yAxis, Math.PI ) );
+			const base = _q.slerpQuaternions( _qb, _qa, 0.55 );
+			const localLook = _qc.setFromEuler( _e.set( this.vehHeadPitch, this.vehHeadYaw, 0 ) );
+			this.camera.quaternion.copy( base ).multiply( localLook );
+
+		} else {
+
+			this.vehOrbitYaw -= look.x * 0.003;
+			this.vehOrbitPitch = THREE.MathUtils.clamp( this.vehOrbitPitch + look.y * 0.003, - 0.04, 1.15 );
+			const [ dMin, dMax ] = vh.camDistRange || [ 2.8, 9.2 ];
+			this.vehOrbitDist = THREE.MathUtils.clamp( this.vehOrbitDist * ( 1 + wheel * 0.08 ), dMin, dMax );
+
+			if ( vh.speed > 2.2 && this._vehLookHoldT <= 0 ) {
+
+				const behind = vh.getYaw() + Math.PI;
+				let d = behind - this.vehOrbitYaw;
+				d = Math.atan2( Math.sin( d ), Math.cos( d ) );
+				this.vehOrbitYaw += d * ( 1 - Math.exp( - dt * 2.2 ) );
+
+			}
+
+			const target = vh.toWorld( vh.camTargetLocal, _v );
+			const off = _v2.set(
+				Math.sin( this.vehOrbitYaw ) * Math.cos( this.vehOrbitPitch ),
+				Math.sin( this.vehOrbitPitch ),
+				Math.cos( this.vehOrbitYaw ) * Math.cos( this.vehOrbitPitch )
+			);
+
+			let dist = this.vehOrbitDist;
+			if ( this.colliders ) {
+
+				const hitD = this.colliders.raycast( target, off, dist + 0.35 );
+				if ( hitD < dist ) dist = Math.max( 1.2, hitD - 0.35 );
+
+			}
+
+			const want = target.clone().addScaledVector( off, dist );
+			const groundCap = Math.max( this.groundAt( want.x, want.z, want.y + 4 ), this.waterH ) + 0.55;
+			if ( want.y < groundCap ) want.y = groundCap;
+
+			if ( ! this.vehCamInit ) {
+
+				this.vehCamPos.copy( want );
+				this.vehCamInit = true;
+
+			}
+
+			this.vehCamPos.lerp( want, 1 - Math.exp( - dt * 11 ) );
+			this.camera.position.copy( this.vehCamPos );
 			this.camera.lookAt( target );
 
 		}

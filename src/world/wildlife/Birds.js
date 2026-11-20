@@ -42,6 +42,7 @@ export class Birds {
 		this.agents = [];
 		this.perches = this.buildPerches( village, colliders );
 		this.wind = new THREE.Vector2();
+		this.weatherCalm = 1;
 
 		const rng = this.rng;
 		const add = ( kind, species, init ) => {
@@ -272,6 +273,9 @@ export class Birds {
 		this.lastViewer = viewer;
 		this.wind.set( G.windDir.value.x, G.windDir.value.y ).multiplyScalar( G.windSpeed.value );
 		const day = 1 - G.night.value;
+		const rain = G.weather ? G.weather.value.x : 0;
+		const storm = G.weather ? G.weather.value.z : 0;
+		this.weatherCalm = Math.max( 0.15, 1 - rain * 0.6 - storm * 0.3 );
 		this.updateSquad( dt );
 		for ( const a of this.agents ) {
 
@@ -483,7 +487,7 @@ export class Birds {
 				const th = this.threat( viewer, P.pos[ 0 ], P.pos[ 1 ], P.pos[ 2 ] );
 				const flush = FLUSH[ BIRD.GULL ] * ( a.perch.kind === 'sand' ? 1.6 : 1 );
 				const boatGone = a.perch.kind === 'boat' && ( this.boat.driven || this.boat.speed > 0.8 );
-				a.t -= dt * day;
+				a.t -= dt * day * this.weatherCalm;
 				if ( th < flush || boatGone ) {
 
 					a.alarm = ( a.alarm || 0 ) + dt;
@@ -519,9 +523,9 @@ export class Birds {
 
 					// next: another waypoint, a spell of circling on an updraft, or a perch
 					const r = this.rng();
-					if ( r < 0.3 || day < 0.3 ) {
+					if ( r < 0.3 || day < 0.3 || this.weatherCalm < 0.65 ) {
 
-						const p = this.pickPerch( a, viewer, day < 0.3 );
+						const p = this.pickPerch( a, viewer, day < 0.3 || this.weatherCalm < 0.65 );
 						if ( p ) {
 
 							a.state = 'approach';
@@ -702,7 +706,7 @@ export class Birds {
 				if ( a.t <= 0 ) {
 
 					f.windK = 0.35;
-					if ( this.rng() < 0.45 ) {
+					if ( this.rng() < 0.45 * this.weatherCalm ) {
 
 						a.state = 'dive';
 						a.t = 0;
@@ -1083,7 +1087,7 @@ export class Birds {
 		c.t += dt;
 		c.x += ( this.wind.x * 0.3 + ( a.home.x - c.x ) * 0.01 ) * dt;
 		c.z += ( this.wind.y * 0.3 + ( a.home.z - c.z ) * 0.01 ) * dt;
-		const y = c.y + Math.sin( c.t * 0.05 ) * 20;
+		const y = c.y * ( 0.6 + 0.4 * this.weatherCalm ) + Math.sin( c.t * 0.05 ) * 20;
 		const ang = Math.atan2( f.z - c.z, f.x - c.x ) + c.dir * 0.45;
 		f.headYaw += ( c.dir * 0.25 - f.headYaw ) * approach( 1, dt );
 		this.flyTo( a, dt, c.x + Math.cos( ang ) * c.r, y, c.z + Math.sin( ang ) * c.r, f.cfg.speed, f.y < y - 25 ? 1 : 0, 1.4 );

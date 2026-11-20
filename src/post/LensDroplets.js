@@ -18,23 +18,28 @@ export class LensDroplets {
 			age: [ 'f32', 100 ], // seconds since surfacing
 			seed: [ 'f32', 0 ],
 			aspect: [ 'f32', 16 / 9 ], // output width / height (screenSize)
+			rain: [ 'f32', 0 ], // 0..1 active raindrop density
+			rainTime: [ 'f32', 0 ],
 		}, { label: 'lens' } );
 		const U = this.uniforms.fields;
 		this.wet = U.wet;
 		this.age = U.age;
 		this.seed = U.seed;
 		this.aspect = U.aspect;
+		this.rain = U.rain;
+		this.rainTime = U.rainTime;
 		this.duration = 9; // seconds until the lens is dry
 		this._wasUnder = false;
 		this.module = new ShaderModule( { name: 'lens', uniforms: this.uniforms, uniformName: 'lensParams', code: CODE } );
 
 	}
 
-	update( dt, underwater ) {
+	update( dt, underwater, rainIntensity = 0, sheltered = false, lookPitch = 0 ) {
 
 		if ( underwater ) {
 
 			this.wet.value = 0;
+			this.rain.value = 0;
 
 		} else {
 
@@ -48,6 +53,20 @@ export class LensDroplets {
 
 			this.age.value += dt;
 			this.wet.value = Math.max( 0, this.wet.value - dt / this.duration );
+
+			if ( ! sheltered && rainIntensity > 0.01 ) {
+
+				const pitchBias = Math.max( 0.25, Math.min( 1.2, 0.72 + lookPitch * 0.55 ) );
+				const targetRain = Math.min( 1, rainIntensity * pitchBias );
+				this.rain.value += ( targetRain - this.rain.value ) * ( 1 - Math.exp( - dt * 2.5 ) );
+				this.rainTime.value += dt;
+
+			} else {
+
+				this.rain.value = Math.max( 0, this.rain.value - dt * 0.25 );
+				if ( this.rain.value > 0.001 ) this.rainTime.value += dt * 0.5;
+
+			}
 
 		}
 
@@ -122,20 +141,65 @@ fn lensLayer( p: vec2f, cell: f32, rMin: f32, rMax: f32, density: f32, slide: bo
 	}
 }
 
+fn lensRainLayer( p: vec2f, cell: f32, rMin: f32, rMax: f32, density: f32, t: f32, seed: f32, acc: ptr<function, LensAcc> ) {
+	let c0 = floor( p / cell );
+	for ( var j = -1; j <= 1; j++ ) {
+		for ( var i = -1; i <= 1; i++ ) {
+			let c = c0 + vec2f( f32( i ), f32( j ) );
+			let h = lensHash2( c + seed );
+			if ( h.x >= density ) { continue; }
+			let cyc = t * ( 0.32 + h.y * 0.22 ) + h.x * 13.7;
+			let age = fract( cyc );
+			let gen = floor( cyc );
+			let h2 = lensHash2( c + seed + gen * 3.17 );
+			let life = smoothstep( 0.0, 0.12, age ) * smoothstep( 1.0, 0.72, age );
+			if ( life <= 0.005 ) { continue; }
+			var center = ( c + ( vec2f( 0.18 ) + h2 * 0.64 ) ) * cell;
+			let slide = max( age - 0.35, 0.0 ) * 0.11 * ( 0.5 + h2.y );
+			center.y += slide;
+			let r = mix( rMin, rMax, h2.x * h2.x ) * sqrt( life );
+			if ( slide > 0.002 ) {
+				let dxT = abs( p.x - center.x );
+				let above = center.y - p.y;
+				let tr = smoothstep( r * 0.42, 0.0, dxT ) * smoothstep( 0.0, 0.008, above ) * smoothstep( slide + 0.01, 0.0, above );
+				( *acc ).trail = max( ( *acc ).trail, tr * life * 0.7 );
+			}
+			let d = ( p - center ) * vec2f( 1.0, 0.85 );
+			let rB = max( r * 1.18, 1e-4 );
+			if ( dot( d, d ) >= rB * rB ) { continue; }
+			let ang = atan2( d.y, d.x );
+			let wobble = 1.0 + sin( ang * 3.0 + h.x * 40.0 ) * 0.1 + sin( ang * 5.0 + h2.y * 30.0 ) * 0.05;
+			let q = d / max( r * wobble, 1e-4 );
+			let a = smoothstep( 1.0, 0.68, dot( q, q ) ) * life;
+			if ( a > ( *acc ).cover ) {
+				( *acc ).n2 = q;
+				( *acc ).cover = a;
+			}
+		}
+	}
+}
+
 fn lensDroplets( uv: vec2f ) -> vec3f {
 	var col = lensSharp( uv );
 	let wet = lensParams.wet;
-	if ( wet > 0.001 ) {
+	let rain = lensParams.rain;
+	if ( wet > 0.001 || rain > 0.001 ) {
 		let aspect = lensParams.aspect;
 		let p = vec2f( uv.x * aspect, uv.y ); // y grows downward on screen
 
-		// ---- droplets (two layers: clinging small drops, sliding large drops)
+		// ---- droplets (surfacing + dynamic rain)
 		var acc: LensAcc;
 		acc.n2 = vec2f( 0.0 ); // droplet normal (xy) of the drop covering this pixel
 		acc.cover = 0.0; // soft coverage (drops are out of focus)
 		acc.trail = 0.0;
-		lensLayer( p, 0.05, 0.003, 0.011, wet * 0.5, false, &acc );
-		lensLayer( p, 0.13, 0.01, 0.026, wet * 0.22, true, &acc );
+		if ( wet > 0.001 ) {
+			lensLayer( p, 0.05, 0.003, 0.011, wet * 0.5, false, &acc );
+			lensLayer( p, 0.13, 0.01, 0.026, wet * 0.22, true, &acc );
+		}
+		if ( rain > 0.001 ) {
+			lensRainLayer( p, 0.065, 0.0025, 0.0085, rain * 0.42, lensParams.rainTime, 11.7, &acc );
+			lensRainLayer( p, 0.135, 0.006, 0.015, rain * 0.26, lensParams.rainTime * 0.85, 53.3, &acc );
+		}
 
 		if ( acc.cover > 0.001 ) {
 			let n2 = acc.n2;

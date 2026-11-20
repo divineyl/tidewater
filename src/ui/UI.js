@@ -1,4 +1,5 @@
 import { icon, brandMark } from './icons.js';
+import { getLang, toggleLang, onLangChange, tr, trPhase, trSurface } from '../i18n/i18n.js';
 
 // Tidewater UI: settings panel (tabs → folders → controls), HUD, help,
 // photo mode, start overlay and loader. Plain DOM, no dependencies.
@@ -146,13 +147,15 @@ const CARDINALS = [ 'N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW' ];
 
 function modeIcon( label ) {
 
-	const s = String( label || '' ).toLowerCase();
-	if ( s.includes( 'boat' ) ) return 'boat';
-	if ( s.includes( 'div' ) ) return 'dive';
-	if ( s.includes( 'swim' ) ) return 'swim';
-	if ( s.includes( 'free' ) || s.includes( 'fly' ) ) return 'move';
-	if ( s.includes( 'photo' ) ) return 'viewfinder';
-	if ( s.includes( 'walk' ) || s.includes( 'run' ) ) return 'walk';
+	const raw = String( label || '' );
+	const s = raw.toLowerCase();
+	if ( s.includes( 'boat' ) || s.includes( 'deck' ) || raw.includes( '船' ) || raw.includes( '甲板' ) ) return 'boat';
+	if ( s.includes( 'motor' ) || s.includes( 'bike' ) || s.includes( 'vehicle' ) || s.includes( 'buggy' ) || raw.includes( '摩托' ) || raw.includes( '车' ) ) return 'bike';
+	if ( s.includes( 'div' ) || raw.includes( '潜' ) ) return 'dive';
+	if ( s.includes( 'swim' ) || raw.includes( '游' ) ) return 'swim';
+	if ( s.includes( 'free' ) || s.includes( 'fly' ) || raw.includes( '自由' ) ) return 'move';
+	if ( s.includes( 'photo' ) || raw.includes( '拍' ) ) return 'viewfinder';
+	if ( s.includes( 'walk' ) || s.includes( 'run' ) || raw.includes( '步' ) ) return 'walk';
 	return 'dot';
 
 }
@@ -189,7 +192,9 @@ class Control {
 		this.ui = parent.ui;
 		this.opts = opts;
 		this.type = type;
-		this.label = opts.label ?? ( opts.key != null ? String( opts.key ) : '' );
+		this._rawLabel = opts.label ?? ( opts.key != null ? String( opts.key ) : '' );
+		this._rawTooltip = opts.tooltip || '';
+		this.label = tr( this._rawLabel );
 		if ( opts.object && opts.key != null ) {
 
 			this.object = opts.object;
@@ -297,6 +302,27 @@ class Control {
 
 	}
 
+	relocalize() {
+
+		if ( this._rawLabel !== undefined ) this.setLabel( tr( this._rawLabel ) );
+		if ( this.labelText && this._rawTooltip ) {
+
+			this.labelText.dataset.tip = tr( this._rawTooltip );
+			this.labelText.dataset.tipHint = tr( 'Double-click to reset' );
+
+		}
+
+		if ( this._resetBtn ) {
+
+			this._resetBtn.dataset.tip = tr( 'Reset to default' );
+			this._resetBtn.setAttribute( 'aria-label', tr( 'Reset to default' ) );
+
+		}
+
+		return this;
+
+	}
+
 	dispose() {
 
 		this.el.remove();
@@ -332,12 +358,12 @@ class Control {
 		const txt = h( 'span', 'tw-label-text', { text } );
 		if ( tooltip ) {
 
-			txt.dataset.tip = tooltip;
-			txt.dataset.tipHint = 'Double-click to reset';
+			txt.dataset.tip = tr( tooltip );
+			txt.dataset.tipHint = tr( 'Double-click to reset' );
 
 		}
 
-		const rst = h( 'button', 'tw-reset', { type: 'button', tabindex: '-1', 'aria-label': `Reset ${ text }`, 'data-tip': 'Reset to default', html: icon( 'reset' ) } );
+		const rst = h( 'button', 'tw-reset', { type: 'button', tabindex: '-1', 'aria-label': tr( 'Reset to default' ), 'data-tip': tr( 'Reset to default' ), html: icon( 'reset' ) } );
 		rst.addEventListener( 'click', ( e ) => {
 
 			e.stopPropagation();
@@ -354,6 +380,7 @@ class Control {
 		lab.append( txt, rst );
 		this.labelEl = lab;
 		this.labelText = txt;
+		this._resetBtn = rst;
 		return lab;
 
 	}
@@ -398,7 +425,7 @@ class SliderControl extends Control {
 
 		const head = h( 'div', 'tw-row' );
 		head.append( this._makeLabel( this.label, o.tooltip ) );
-		this.valueEl = h( 'button', 'tw-value', { type: 'button', tabindex: '-1', 'data-tip': 'Click to type a value' } );
+		this.valueEl = h( 'button', 'tw-value', { type: 'button', tabindex: '-1', 'data-tip': tr( 'Click to type a value' ) } );
 		head.append( this.valueEl );
 
 		this.track = h( 'div', 'tw-slider', { role: 'slider', tabindex: '0', 'aria-label': this.label, 'aria-valuemin': min, 'aria-valuemax': max } );
@@ -530,6 +557,16 @@ class SliderControl extends Control {
 		}
 
 		this._syncModified();
+		return this;
+
+	}
+
+	relocalize() {
+
+		super.relocalize();
+		if ( this.valueEl ) this.valueEl.dataset.tip = tr( 'Click to type a value' );
+		this._txt = null;
+		this.update();
 		return this;
 
 	}
@@ -787,13 +824,15 @@ class SelectControl extends Control {
 
 		super( parent, o, 'select' );
 		this._default = this.value;
+		this._rawOptions = o.options;
 		this._build( o.options );
 
 	}
 
 	_build( options ) {
 
-		this.options = normalizeOptions( options );
+		this._rawOptions = options;
+		this.options = normalizeOptions( options ).map( ( o ) => ( { ...o, rawLabel: o.label, label: tr( o.label ) } ) );
 		this.segmented = this.opts.segmented ?? this.options.length <= 4;
 		this.el.replaceChildren();
 		this.el.classList.toggle( 'is-segmented', this.segmented );
@@ -803,6 +842,14 @@ class SelectControl extends Control {
 		if ( this.segmented ) this._buildSegmented();
 		else this._buildDropdown();
 		this.update();
+
+	}
+
+	relocalize() {
+
+		this.label = tr( this._rawLabel );
+		this._build( this._rawOptions );
+		return this;
 
 	}
 
@@ -1044,7 +1091,7 @@ class ButtonControl extends Control {
 		const variant = o.variant === 'primary' || o.variant === 'ghost' ? o.variant : 'default';
 		this.btn = h( 'button', `tw-btn tw-btn-${ variant }`, { type: 'button' } );
 		this.btn.innerHTML = ( o.icon ? icon( o.icon ) : '' ) + `<span class="tw-btn-text">${ esc( this.label ) }</span>`;
-		if ( o.tooltip ) this.btn.dataset.tip = o.tooltip;
+		if ( o.tooltip ) this.btn.dataset.tip = tr( o.tooltip );
 		this.btn.addEventListener( 'click', ( e ) => {
 
 			if ( ! this.enabled ) return;
@@ -1071,6 +1118,14 @@ class ButtonControl extends Control {
 
 	}
 
+	relocalize() {
+
+		this.setLabel( tr( this._rawLabel ) );
+		if ( this._rawTooltip ) this.btn.dataset.tip = tr( this._rawTooltip );
+		return this;
+
+	}
+
 	update() {
 
 		return this;
@@ -1092,20 +1147,20 @@ class PresetsControl extends Control {
 
 			const head = h( 'div', 'tw-row' );
 			const lab = h( 'span', 'tw-label' );
-			this.labelText = h( 'span', 'tw-label-text', { text: o.label } );
+			this.labelText = h( 'span', 'tw-label-text', { text: tr( o.label ) } );
 			lab.append( this.labelText );
 			head.append( lab );
 			this.el.append( head );
 
 		}
 
-		const grid = h( 'div', 'tw-presets', { role: 'radiogroup', 'aria-label': o.label || 'Presets' } );
-		grid.style.setProperty( '--n', Math.min( 4, Math.max( 1, this.presets.length ) ) );
+		const grid = h( 'div', 'tw-presets', { role: 'radiogroup', 'aria-label': tr( o.label || 'Presets' ) } );
+		grid.style.setProperty( '--n', o.columns || Math.min( 4, Math.max( 1, this.presets.length ) ) );
 		this.chips = this.presets.map( ( p, i ) => {
 
 			const b = h( 'button', 'tw-chip', { type: 'button', role: 'radio', 'aria-checked': 'false' } );
-			b.innerHTML = ( p.icon ? icon( p.icon ) : '' ) + `<span>${ esc( p.label ) }</span>`;
-			if ( p.tooltip || p.description ) b.dataset.tip = p.tooltip || p.description;
+			b.innerHTML = ( p.icon ? icon( p.icon ) : '' ) + `<span>${ esc( tr( p.label ) ) }</span>`;
+			if ( p.tooltip || p.description ) b.dataset.tip = tr( p.tooltip || p.description );
 			b.addEventListener( 'click', () => this.apply( i ) );
 			grid.append( b );
 			return b;
@@ -1113,6 +1168,22 @@ class PresetsControl extends Control {
 		} );
 		this.el.append( grid );
 		this.update();
+
+	}
+
+	relocalize() {
+
+		if ( this.labelText ) this.labelText.textContent = tr( this._rawLabel );
+		this.chips.forEach( ( b, i ) => {
+
+			const p = this.presets[ i ];
+			if ( ! p ) return;
+			const sp = b.querySelector( 'span:last-child' );
+			if ( sp ) sp.textContent = tr( p.label );
+			if ( p.tooltip || p.description ) b.dataset.tip = tr( p.tooltip || p.description );
+
+		} );
+		return this;
 
 	}
 
@@ -1218,11 +1289,20 @@ class InfoControl extends Control {
 		this.getter = typeof o.get === 'function' ? o.get : () => this.object[ this.key ];
 		const lab = h( 'span', 'tw-label' );
 		this.labelText = h( 'span', 'tw-label-text', { text: this.label } );
-		if ( o.tooltip ) this.labelText.dataset.tip = o.tooltip;
+		if ( o.tooltip ) this.labelText.dataset.tip = tr( o.tooltip );
 		lab.append( this.labelText );
 		this.valEl = h( 'span', 'tw-info-value' );
 		this.el.append( lab, this.valEl );
 		this.update();
+
+	}
+
+	relocalize() {
+
+		super.relocalize();
+		this._s = null;
+		this.update();
+		return this;
 
 	}
 
@@ -1367,7 +1447,7 @@ class TimeOfDayControl extends Control {
 
 		const head = h( 'div', 'tw-row' );
 		head.append( this._makeLabel( this.label, o.tooltip ) );
-		this.valueEl = h( 'button', 'tw-value tw-clock', { type: 'button', tabindex: '-1', 'data-tip': 'Click to type a time' } );
+		this.valueEl = h( 'button', 'tw-value tw-clock', { type: 'button', tabindex: '-1', 'data-tip': tr( 'Click to type a time' ) } );
 		head.append( this.valueEl );
 
 		const dial = h( 'div', 'tw-tod' );
@@ -1605,12 +1685,22 @@ class TimeOfDayControl extends Control {
 		this.glint.setAttribute( 'opacity', e > 0 ? ( 0.85 * Math.pow( 1 - e, 1.5 ) ).toFixed( 3 ) : '0' );
 
 		const clock = fmtClock( hrs );
-		const phase = phaseAt( hrs );
+		const phase = trPhase( phaseAt( hrs ) );
 		this.valueEl.textContent = clock;
 		this.phase.textContent = phase;
 		this.knob.style.left = `${ ( hrs / 24 ) * 100 }%`;
 		this.svg.setAttribute( 'aria-valuenow', hrs.toFixed( 2 ) );
 		this.svg.setAttribute( 'aria-valuetext', `${ clock }, ${ phase }` );
+
+	}
+
+	relocalize() {
+
+		super.relocalize();
+		if ( this.valueEl ) this.valueEl.dataset.tip = tr( 'Click to type a time' );
+		this._h = null;
+		this.update();
+		return this;
 
 	}
 
@@ -1735,14 +1825,16 @@ class Folder extends Container {
 	constructor( parent, label, { icon: iconName, open = true, tooltip } = {} ) {
 
 		super( parent.ui, parent );
-		this.label = String( label ?? '' );
+		this._rawLabel = String( label ?? '' );
+		this._rawTooltip = tooltip || '';
+		this.label = tr( this._rawLabel );
 		this.isOpen = true;
 		this.el = h( 'section', 'tw-folder' + ( parent instanceof Folder ? ' is-nested' : '' ) );
 		const bodyId = uid( 'tw-fb' );
 		this.head = h( 'button', 'tw-folder-head', { type: 'button', 'aria-expanded': 'true', 'aria-controls': bodyId } );
 		this.head.innerHTML = ( iconName ? icon( iconName, 'tw-folder-ico' ) : '' ) +
 			`<span class="tw-folder-title">${ esc( this.label ) }</span>` + icon( 'chevron-down', 'tw-folder-chev' );
-		if ( tooltip ) this.head.dataset.tip = tooltip;
+		if ( tooltip ) this.head.dataset.tip = tr( tooltip );
 		this.wrap = h( 'div', 'tw-folder-wrap', { id: bodyId } );
 		this.body = h( 'div', 'tw-folder-body' );
 		this.wrap.append( this.body );
@@ -1797,6 +1889,15 @@ class Folder extends Container {
 
 	}
 
+	relocalize() {
+
+		this.setLabel( tr( this._rawLabel ) );
+		if ( this._rawTooltip ) this.head.dataset.tip = tr( this._rawTooltip );
+		for ( const c of this.children ) c.relocalize?.();
+		return this;
+
+	}
+
 }
 
 class Tab extends Container {
@@ -1807,7 +1908,8 @@ class Tab extends Container {
 		this.isTab = true;
 		this.isOpen = true;
 		this.id = id;
-		this.label = String( label );
+		this._rawLabel = String( label ?? id );
+		this.label = tr( this._rawLabel );
 		this.iconName = iconName;
 		this._scroll = 0;
 		const pageId = uid( 'tw-page' ), tabId = uid( 'tw-tab' );
@@ -1824,6 +1926,19 @@ class Tab extends Container {
 			ui.togglePanel( true );
 
 		} );
+
+	}
+
+	relocalize() {
+
+		this.label = tr( this._rawLabel );
+		const lbl = this.btn.querySelector( '.tw-tab-label' );
+		if ( lbl ) lbl.textContent = this.label;
+		this.btn.dataset.tip = this.label;
+		this.railBtn.dataset.tip = this.label;
+		this.railBtn.setAttribute( 'aria-label', this.label );
+		for ( const c of this.children ) c.relocalize?.();
+		return this;
 
 	}
 
@@ -1891,6 +2006,8 @@ export class UI {
 
 		// Hooks: assign a function (or an array of functions).
 		this.onPhotoMode = null; // ( on ) photo mode entered / left (P key or setPhotoMode)
+		this.onPhotoCapture = null; // () triggered on F2 or shutter button in photo mode
+		this.onPhotoZoom = null; // ( deltaDeg ) triggered on [ / ] / 0 or zoom buttons in photo mode
 		this.onPanelInteract = null; // ( event ) pointerdown on the settings panel or rail
 		this.onPanelToggle = null; // ( open )
 		this.onHelpToggle = null; // ( open )
@@ -1907,9 +2024,11 @@ export class UI {
 		this._buildHelp();
 		this._buildStart();
 		this.tipEl = h( 'div', 'tw-tip', { role: 'tooltip', 'aria-hidden': 'true' } );
-		this.root.append( this.tipEl );
+		this.shutterEl = h( 'div', 'tw-shutter-flash', { 'aria-hidden': 'true' } );
+		this.root.append( this.tipEl, this.shutterEl );
 		this.container.append( this.root );
 
+		this._unsubLang = onLangChange( () => this.applyLanguage() );
 		this._bindGlobal();
 		this._timer = setInterval( () => this._tick(), 250 );
 
@@ -1944,6 +2063,11 @@ export class UI {
 		this.modeText = h( 'span', 'tw-mode-text' );
 		this.modeEl.append( this.modeIco, this.modeText );
 		brand.append( this.modeEl );
+		this.weatherEl = h( 'div', 'tw-weather is-empty', { role: 'status' } );
+		this.weatherIco = h( 'span', 'tw-weather-ico' );
+		this.weatherText = h( 'span', 'tw-weather-text' );
+		this.weatherEl.append( this.weatherIco, this.weatherText );
+		brand.append( this.weatherEl );
 		tl.append( stats, brand );
 
 		// top-centre: notifications
@@ -1955,8 +2079,9 @@ export class UI {
 		this.promptText = h( 'span', 'tw-prompt-text' );
 		this.promptEl.append( this.promptKey, this.promptText );
 
-		// bottom-left: boat instruments
+		// bottom-left: boat instruments & land vehicle cluster (mutually exclusive)
 		this.boatEl = this._buildBoat();
+		this.vehicleEl = this._buildVehicle();
 
 		// left: depth sounder
 		this.depthEl = h( 'div', 'tw-depth tw-glass', { 'aria-hidden': 'true' } );
@@ -1965,18 +2090,47 @@ export class UI {
 			<span class="tw-depth-mark"></span>
 			<div class="tw-depth-read">
 				<div class="tw-depth-line"><span class="tw-depth-num">0.0</span><span class="tw-unit">m</span></div>
-				<span class="tw-g-lab">Depth</span>
+				<span class="tw-g-lab">${ esc( tr( 'Depth' ) ) }</span>
 			</div>`;
 		this.depthCanvas = this.depthEl.querySelector( '.tw-depth-tape' );
 		this.depthNum = this.depthEl.querySelector( '.tw-depth-num' );
+		this.depthLab = this.depthEl.querySelector( '.tw-g-lab' );
 
-		hud.append( tl, this.toastsEl, this.promptEl, this.boatEl, this.depthEl );
+		hud.append( tl, this.promptEl, this.boatEl, this.vehicleEl, this.depthEl );
 
-		// the one element that survives photo mode
-		this.photoHint = h( 'div', 'tw-photo-hint' );
-		this.photoHint.innerHTML = '<kbd>P</kbd><span>Exit photo mode</span>';
+		// photo mode toolbar: zoom, capture (F2), exit (P)
+		this.photoHint = h( 'div', 'tw-photo-hint tw-interactive' );
+		this.photoHint.innerHTML = `
+			<button type="button" class="tw-photo-btn" data-zoom="-5" title="[">−</button>
+			<span class="tw-photo-fov">35 mm · 62°</span>
+			<button type="button" class="tw-photo-btn" data-zoom="5" title="]">+</button>
+			<span class="tw-photo-sep"></span>
+			<button type="button" class="tw-photo-btn is-shutter" data-shot>${ icon( 'camera' ) }<span class="tw-photo-shot-lbl">${ esc( tr( 'Take photo' ) ) } (F2)</span></button>
+			<span class="tw-photo-sep"></span>
+			<kbd>P</kbd><span class="tw-photo-exit-lbl">${ esc( tr( 'Exit photo mode' ) ) }</span>`;
+		this.photoFovEl = this.photoHint.querySelector( '.tw-photo-fov' );
+		this.photoShotLbl = this.photoHint.querySelector( '.tw-photo-shot-lbl' );
+		this.photoExitLbl = this.photoHint.querySelector( '.tw-photo-exit-lbl' );
+		this.photoHint.querySelectorAll( '[data-zoom]' ).forEach( ( b ) => {
 
-		this.root.append( hud, this.photoHint );
+			b.addEventListener( 'click', ( e ) => {
+
+				e.stopPropagation();
+				this._pokePhotoHint();
+				callHook( this.onPhotoZoom, Number( b.dataset.zoom ) );
+
+			} );
+
+		} );
+		this.photoHint.querySelector( '[data-shot]' ).addEventListener( 'click', ( e ) => {
+
+			e.stopPropagation();
+			this._pokePhotoHint();
+			callHook( this.onPhotoCapture );
+
+		} );
+
+		this.root.append( hud, this.toastsEl, this.photoHint );
 
 	}
 
@@ -2036,7 +2190,7 @@ export class UI {
 					<circle class="tw-dial-head" r="3" cx="24.64" cy="95.36"/>
 					<text class="tw-dial-rpm" x="60" y="105">rpm 0%</text>
 				</svg>
-				<div class="tw-dial-center"><span class="tw-speed">0.0</span><span class="tw-g-unit">knots</span></div>
+				<div class="tw-dial-center"><span class="tw-speed">0.0</span><span class="tw-g-unit tw-boat-unit">${ esc( tr( 'knots' ) ) }</span></div>
 			</div>
 			<div class="tw-compass">
 				<svg viewBox="0 0 100 100">
@@ -2056,29 +2210,92 @@ export class UI {
 		this.bCard = el.querySelector( '.tw-compass-card' );
 		this.bHdgText = el.querySelector( '.tw-hdg-num' );
 		this.bHdgCard = el.querySelector( '.tw-hdg-card' );
+		this.bUnitEl = el.querySelector( '.tw-boat-unit' );
+		return el;
+
+	}
+
+	_buildVehicle() {
+
+		const el = h( 'div', 'tw-vehicle tw-glass', { 'aria-hidden': 'true' } );
+		const P = ( cx, r, deg ) => {
+
+			const a = deg * Math.PI / 180;
+			return [ ( cx + r * Math.cos( a ) ).toFixed( 2 ), ( cx + r * Math.sin( a ) ).toFixed( 2 ) ];
+
+		};
+
+		const ARC = 'M24.64 95.36A50 50 0 1 1 95.36 95.36';
+		let ticks = '';
+		for ( let i = 0; i <= 8; i ++ ) {
+
+			const maj = i % 2 === 0;
+			const [ x1, y1 ] = P( 60, maj ? 37.5 : 40.5, 135 + 33.75 * i );
+			const [ x2, y2 ] = P( 60, 44, 135 + 33.75 * i );
+			ticks += `<line class="${ maj ? 'maj' : '' }" x1="${ x1 }" y1="${ y1 }" x2="${ x2 }" y2="${ y2 }"/>`;
+
+		}
+
+		const gid = uid( 'tw-vrpm' );
+		el.innerHTML = `
+			<div class="tw-dial">
+				<svg viewBox="0 0 120 120">
+					<defs><linearGradient id="${ gid }" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#3fc0d6"/><stop offset=".68" stop-color="#5fe3d4"/><stop offset="1" stop-color="#ffb86b"/></linearGradient></defs>
+					<path class="tw-dial-bg" d="${ ARC }"/>
+					<path class="tw-dial-red" d="${ ARC }" pathLength="100" stroke-dasharray="16 100" stroke-dashoffset="-84"/>
+					<path class="tw-dial-val tw-vdial-val" d="${ ARC }" pathLength="100" stroke-dasharray="0 100" stroke="url(#${ gid })"/>
+					<g class="tw-dial-ticks">${ ticks }</g>
+					<circle class="tw-dial-head tw-vdial-head" r="3" cx="24.64" cy="95.36"/>
+					<text class="tw-dial-rpm tw-vdial-rpm" x="60" y="105">0 rpm</text>
+				</svg>
+				<div class="tw-dial-center"><span class="tw-speed tw-vspeed">0</span><span class="tw-g-unit">km/h</span></div>
+			</div>
+			<div class="tw-vmeta">
+				<div class="tw-vgear-row">
+					<span class="tw-vgear">N</span>
+					<span class="tw-vlight" data-tip="${ esc( tr( 'Headlight (L)' ) ) }">${ icon( 'headlight' ) }</span>
+				</div>
+				<span class="tw-vsurf">Sand</span>
+			</div>`;
+		this.vArc = el.querySelector( '.tw-vdial-val' );
+		this.vHead = el.querySelector( '.tw-vdial-head' );
+		this.vRpmText = el.querySelector( '.tw-vdial-rpm' );
+		this.vSpeed = el.querySelector( '.tw-vspeed' );
+		this.vGear = el.querySelector( '.tw-vgear' );
+		this.vLight = el.querySelector( '.tw-vlight' );
+		this.vSurf = el.querySelector( '.tw-vsurf' );
 		return el;
 
 	}
 
 	_buildPanel() {
 
-		const panel = this.panel = h( 'aside', 'tw-panel tw-glass tw-interactive', { 'aria-label': 'Settings' } );
+		const panel = this.panel = h( 'aside', 'tw-panel tw-glass tw-interactive', { 'aria-label': tr( 'Settings' ) } );
 		panel.inert = true;
 
 		const head = h( 'header', 'tw-panel-head' );
-		head.append( h( 'div', 'tw-panel-title', { text: 'Settings' } ) );
+		this.panelTitleEl = h( 'div', 'tw-panel-title', { text: tr( 'Settings' ) } );
+		head.append( this.panelTitleEl );
 		const actions = h( 'div', 'tw-panel-actions' );
-		const action = ( name, tip, fn ) => {
+		this.langBtn = h( 'button', 'tw-lang-btn', { type: 'button', text: getLang() === 'zh' ? 'EN' : '中文', 'data-tip': '切换语言 / Language' } );
+		this.langBtn.addEventListener( 'click', () => toggleLang() );
+		actions.append( this.langBtn );
+		const action = ( name, rawTip, fn ) => {
 
+			const tip = tr( rawTip );
 			const b = h( 'button', 'tw-icon-btn', { type: 'button', 'aria-label': tip, 'data-tip': tip, html: icon( name ) } );
+			b._rawTip = rawTip;
 			b.addEventListener( 'click', fn );
 			actions.append( b );
+			return b;
 
 		};
 
-		action( 'viewfinder', 'Photo mode (P)', () => this.setPhotoMode( true ) );
-		action( 'help', 'Controls (F1)', () => this.toggleHelp() );
-		action( 'chevrons-right', 'Collapse (H)', () => this.togglePanel( false ) );
+		this._panelActionBtns = [
+			action( 'viewfinder', 'Photo mode (P)', () => this.setPhotoMode( true ) ),
+			action( 'help', 'Controls (F1)', () => this.toggleHelp() ),
+			action( 'chevrons-right', 'Collapse (H)', () => this.togglePanel( false ) ),
+		];
 		head.append( actions );
 
 		this.tabBar = h( 'div', 'tw-tabs', { role: 'tablist', 'aria-label': 'Settings sections' } );
@@ -2102,16 +2319,16 @@ export class UI {
 
 		this.pages = h( 'div', 'tw-pages' );
 
-		const foot = h( 'footer', 'tw-panel-foot' );
-		foot.innerHTML = '<span><kbd>H</kbd>Hide</span><span><kbd>F1</kbd>Controls</span><span><kbd>P</kbd>Photo mode</span>';
+		const foot = this.panelFootEl = h( 'footer', 'tw-panel-foot' );
+		foot.innerHTML = `<span><kbd>H</kbd>${ esc( tr( 'Hide' ) ) }</span><span><kbd>F1</kbd>${ esc( tr( 'Controls' ) ) }</span><span><kbd>P</kbd>${ esc( tr( 'Photo mode' ) ) }</span>`;
 		panel.append( head, this.tabBar, this.pages, foot );
 
 		// collapsed state: a slim rail of tab icons
-		const rail = this.rail = h( 'nav', 'tw-rail tw-glass tw-interactive', { 'aria-label': 'Settings' } );
-		const open = h( 'button', 'tw-rail-btn tw-rail-open', { type: 'button', 'aria-label': 'Open settings', 'data-tip': 'Settings (H)', 'data-tip-side': 'left', html: icon( 'sliders' ) } );
+		const rail = this.rail = h( 'nav', 'tw-rail tw-glass tw-interactive', { 'aria-label': tr( 'Settings' ) } );
+		const open = this.railOpenBtn = h( 'button', 'tw-rail-btn tw-rail-open', { type: 'button', 'aria-label': tr( 'Open settings' ), 'data-tip': tr( 'Settings (H)' ), 'data-tip-side': 'left', html: icon( 'sliders' ) } );
 		open.addEventListener( 'click', () => this.togglePanel( true ) );
 		this.railTabs = h( 'div', 'tw-rail-tabs' );
-		const help = h( 'button', 'tw-rail-btn', { type: 'button', 'aria-label': 'Controls', 'data-tip': 'Controls (F1)', 'data-tip-side': 'left', html: icon( 'help' ) } );
+		const help = this.railHelpBtn = h( 'button', 'tw-rail-btn', { type: 'button', 'aria-label': tr( 'Controls' ), 'data-tip': tr( 'Controls (F1)' ), 'data-tip-side': 'left', html: icon( 'help' ) } );
 		help.addEventListener( 'click', () => this.toggleHelp() );
 		rail.append( open, h( 'span', 'tw-rail-sep' ), this.railTabs, h( 'span', 'tw-rail-sep' ), help );
 
@@ -2121,84 +2338,103 @@ export class UI {
 
 	_buildHelp() {
 
-		const k = ( ...keys ) => keys.map( ( x ) => `<kbd>${ x }</kbd>` ).join( '' );
-		const row = ( keys, text ) => `<div class="tw-help-row"><span class="tw-keys">${ keys }</span><span class="tw-help-text">${ text }</span></div>`;
-		const wasd = '<span class="tw-wasd"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>';
-		const mouse = `<kbd class="tw-kbd-ico" aria-label="Mouse">${ icon( 'mouse' ) }</kbd>`;
-
 		const el = this.helpEl = h( 'div', 'tw-help tw-interactive', { role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'tw-help-title', hidden: true } );
-		el.innerHTML = `
-			<div class="tw-help-card tw-glass">
-				<header class="tw-help-head">
-					<div>
-						<h2 id="tw-help-title">Controls</h2>
-						<p>Click the view to capture the mouse. Esc releases it.</p>
-					</div>
-					<button type="button" class="tw-icon-btn tw-help-close" aria-label="Close" data-tip="Close (F1)">${ icon( 'close' ) }</button>
-				</header>
-				<div class="tw-help-grid">
-					<section>
-						<h3>Move</h3>
-						${ row( wasd, 'Move' ) }
-						${ row( mouse, 'Look around<small>Click to capture</small>' ) }
-						${ row( k( 'Shift' ), 'Sprint, boat boost' ) }
-						${ row( k( 'Space' ), 'Jump, swim up' ) }
-						${ row( k( 'C' ), 'Crouch, dive' ) }
-					</section>
-					<section>
-						<h3>Interact</h3>
-						${ row( k( 'E' ), 'Interact<small>Board, helm, step ashore, trade</small>' ) }
-						${ row( k( 'V' ), 'Boat camera<small>1st / 3rd person</small>' ) }
-						${ row( k( 'R' ), 'Fishing rod<small>Take out / put away</small>' ) }
-						${ row( k( 'LMB' ), 'Cast, strike, reel<small>Hold to wind up / reel</small>' ) }
-						${ row( k( 'RMB' ), 'Reel in an empty line' ) }
-						${ row( k( 'I' ), 'Cooler and fish log' ) }
-						${ row( k( 'F' ), 'Free camera' ) }
-						${ row( k( 'T' ), 'Pause time' ) }
-						${ row( k( 'L' ), 'Flashlight' ) }
-						${ row( k( 'M' ), 'Mute' ) }
-					</section>
-					<section>
-						<h3>Interface</h3>
-						${ row( k( 'H' ), 'Settings panel' ) }
-						${ row( k( 'P' ), 'Photo mode<small>Hides all interface</small>' ) }
-						${ row( k( 'F1' ) + k( '?' ), 'This sheet' ) }
-						${ row( k( 'Esc' ), 'Release the mouse' ) }
-					</section>
-				</div>
-				<div class="tw-help-guide">
-					<span><b>How to play:</b> catch fish, sell them to Joe at the fish stand by the pier, and buy upgrades from Marta at the chandlery by the boathouse. Both are on the map (lower right).</span>
-					<button type="button" class="gm-btn is-ghost tw-help-replay">Replay the guide</button>
-				</div>
-			</div>`;
-		el.querySelector( '.tw-help-close' ).addEventListener( 'click', () => this.toggleHelp( false ) );
-		el.querySelector( '.tw-help-replay' ).addEventListener( 'click', () => callHook( this.onReplayGuide ) );
 		el.addEventListener( 'click', ( e ) => {
 
 			if ( e.target === el ) this.toggleHelp( false );
 
 		} );
+		this._populateHelp();
 		this.root.append( el );
+
+	}
+
+	_populateHelp() {
+
+		const el = this.helpEl;
+		if ( ! el ) return;
+		const k = ( ...keys ) => keys.map( ( x ) => `<kbd>${ x }</kbd>` ).join( '' );
+		const row = ( keys, text ) => `<div class="tw-help-row"><span class="tw-keys">${ keys }</span><span class="tw-help-text">${ text }</span></div>`;
+		const wasd = '<span class="tw-wasd"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>';
+		const mouse = `<kbd class="tw-kbd-ico" aria-label="Mouse">${ icon( 'mouse' ) }</kbd>`;
+		el.innerHTML = `
+			<div class="tw-help-card tw-glass">
+				<header class="tw-help-head">
+					<div>
+						<h2 id="tw-help-title">${ esc( tr( 'Controls' ) ) }</h2>
+						<p>${ esc( tr( 'Click the view to capture the mouse. Esc releases it.' ) ) }</p>
+					</div>
+					<button type="button" class="tw-icon-btn tw-help-close" aria-label="${ esc( tr( 'Close' ) ) }" data-tip="${ esc( tr( 'Close (F1)' ) ) }">${ icon( 'close' ) }</button>
+				</header>
+				<div class="tw-help-grid">
+					<section>
+						<h3>${ esc( tr( 'Move' ) ) }</h3>
+						${ row( wasd, esc( tr( 'Move' ) ) ) }
+						${ row( mouse, `${ esc( tr( 'Look around' ) ) }<small>${ esc( tr( 'Click to capture' ) ) }</small>` ) }
+						${ row( k( 'Shift' ), esc( tr( 'Sprint, boat/bike boost' ) ) ) }
+						${ row( k( 'Space' ), esc( tr( 'Jump, swim up, bike drift/brake' ) ) ) }
+						${ row( k( 'C' ), esc( tr( 'Crouch, dive' ) ) ) }
+						${ row( k( 'Pad' ), `${ esc( tr( 'Gamepad' ) ) }<small>${ esc( tr( 'LS / RS move & look · RT/LT gas/brake · X interact · Y camera' ) ) }</small>` ) }
+					</section>
+					<section>
+						<h3>${ esc( tr( 'Interaction & Tools' ) ) }</h3>
+						${ row( k( 'E' ), `${ esc( tr( 'Interact' ) ) }<small>${ esc( tr( 'Board, helm, ride bike, trade' ) ) }</small>` ) }
+						${ row( k( 'V' ), `${ esc( tr( 'Vehicle camera' ) ) }<small>${ esc( tr( '1st / 3rd person (boat & bike)' ) ) }</small>` ) }
+						${ row( k( 'R' ), `${ esc( tr( 'Fishing rod / Recover bike' ) ) }<small>${ esc( tr( 'Upright or rescue from water' ) ) }</small>` ) }
+						${ row( k( 'LMB' ), `${ esc( tr( 'Cast, strike, reel' ) ) }<small>${ esc( tr( 'Hold to wind up / reel' ) ) }</small>` ) }
+						${ row( k( 'RMB' ), esc( tr( 'Reel in an empty line' ) ) ) }
+						${ row( k( 'I' ), esc( tr( 'Cooler and fish log' ) ) ) }
+						${ row( k( 'F' ), esc( tr( 'Free camera' ) ) ) }
+						${ row( k( 'T' ), esc( tr( 'Pause time' ) ) ) }
+						${ row( k( 'L' ), esc( tr( 'Flashlight / Headlight' ) ) ) }
+						${ row( k( 'G' ), esc( tr( 'Bike horn' ) ) ) }
+						${ row( k( 'M' ), esc( tr( 'Mute' ) ) ) }
+					</section>
+					<section>
+						<h3>${ esc( tr( 'Interface' ) ) }</h3>
+						${ row( k( 'H' ), esc( tr( 'Settings panel' ) ) ) }
+						${ row( k( 'N' ), `${ esc( tr( 'Island map' ) ) }<small>${ esc( tr( 'Expand map & set navigation waypoint' ) ) }</small>` ) }
+						${ row( k( 'P' ), `${ esc( tr( 'Photo mode' ) ) }<small>${ esc( tr( 'Hides all interface · F2 capture · [ ] zoom' ) ) }</small>` ) }
+						${ row( k( 'F2' ) + k( '[' ) + k( ']' ), `${ esc( tr( 'Photo capture & zoom' ) ) }<small>${ esc( tr( 'In photo mode: F2 save PNG, [ ] zoom FOV' ) ) }</small>` ) }
+						${ row( k( 'F1' ) + k( '?' ), esc( tr( 'This sheet' ) ) ) }
+						${ row( k( 'Esc' ), esc( tr( 'Release the mouse' ) ) ) }
+					</section>
+				</div>
+				<div class="tw-help-guide">
+					<span><b>${ esc( tr( 'How to play:' ) ) }</b> ${ esc( tr( 'catch fish, sell them to Joe at the fish stand by the pier, and buy upgrades from Marta at the chandlery by the boathouse. Both are on the map (lower right).' ) ) }</span>
+					<button type="button" class="gm-btn is-ghost tw-help-replay">${ esc( tr( 'Replay the guide' ) ) }</button>
+				</div>
+			</div>`;
+		el.querySelector( '.tw-help-close' ).addEventListener( 'click', () => this.toggleHelp( false ) );
+		el.querySelector( '.tw-help-replay' ).addEventListener( 'click', () => callHook( this.onReplayGuide ) );
 
 	}
 
 	_buildStart() {
 
 		const el = this.startEl = h( 'div', 'tw-start tw-interactive', { hidden: true } );
+		this._populateStart();
+		this.root.append( el );
+
+	}
+
+	_populateStart() {
+
+		const el = this.startEl;
+		if ( ! el ) return;
 		el.innerHTML = `
 			<div class="tw-start-inner">
 				${ brandMark( 'tw-start-mark' ) }
 				<div class="tw-start-title">TIDEWATER</div>
-				<button type="button" class="tw-start-cta"><span class="tw-start-pulse" aria-hidden="true"></span>${ icon( 'mouse' ) }<span>Click to explore</span></button>
+				<button type="button" class="tw-start-cta"><span class="tw-start-pulse" aria-hidden="true"></span>${ icon( 'mouse' ) }<span>${ esc( tr( 'Click to explore' ) ) }</span></button>
 				<div class="tw-start-keys">
-					<span><span class="tw-wasd"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>Move</span>
-					<span><kbd class="tw-kbd-ico">${ icon( 'mouse' ) }</kbd>Look</span>
-					<span><kbd>E</kbd>Interact</span>
-					<span><kbd>H</kbd>Settings</span>
-					<span><kbd>F1</kbd>All controls</span>
+					<span><span class="tw-wasd"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>${ esc( tr( 'Move' ) ) }</span>
+					<span><kbd class="tw-kbd-ico">${ icon( 'mouse' ) }</kbd>${ esc( tr( 'Look' ) ) }</span>
+					<span><kbd>E</kbd>${ esc( tr( 'Interact' ) ) }</span>
+					<span><kbd>H</kbd>${ esc( tr( 'Settings' ) ) }</span>
+					<span><kbd>F1</kbd>${ esc( tr( 'All controls' ) ) }</span>
 				</div>
 			</div>`;
-		this.root.append( el );
 
 	}
 
@@ -2207,7 +2443,7 @@ export class UI {
 	_bindGlobal() {
 
 		const signal = this._ac.signal;
-		for ( const el of [ this.panel, this.rail, this.helpEl, this.startEl ] ) this._isolate( el );
+		for ( const el of [ this.panel, this.rail, this.helpEl, this.startEl, this.photoHint ] ) this._isolate( el );
 
 		const interact = ( e ) => {
 
@@ -2374,6 +2610,30 @@ export class UI {
 		} else if ( e.code === 'KeyP' ) {
 
 			this.setPhotoMode( ! this._photo );
+
+		} else if ( this._photo && e.code === 'F2' ) {
+
+			e.preventDefault();
+			this._pokePhotoHint();
+			callHook( this.onPhotoCapture );
+
+		} else if ( this._photo && e.code === 'BracketLeft' ) {
+
+			e.preventDefault();
+			this._pokePhotoHint();
+			callHook( this.onPhotoZoom, - 4 );
+
+		} else if ( this._photo && e.code === 'BracketRight' ) {
+
+			e.preventDefault();
+			this._pokePhotoHint();
+			callHook( this.onPhotoZoom, 4 );
+
+		} else if ( this._photo && e.code === 'Digit0' ) {
+
+			e.preventDefault();
+			this._pokePhotoHint();
+			callHook( this.onPhotoZoom, 0 );
 
 		}
 
@@ -2716,6 +2976,37 @@ export class UI {
 
 	}
 
+	setWeather( w = null ) {
+
+		if ( ! this.weatherEl ) return;
+		if ( ! w || ! w.label ) {
+
+			this.weatherEl.classList.add( 'is-empty' );
+			return;
+
+		}
+
+		this.weatherEl.classList.remove( 'is-empty' );
+		const pres = typeof w.pressure === 'number' ? Math.round( w.pressure ) : null;
+		const arrow = w.pressureTrend > 0.15 ? ' ↑' : w.pressureTrend < - 0.15 ? ' ↓' : '';
+		const text = pres !== null ? `${ w.label } · ${ pres } hPa${ arrow }` : String( w.label );
+		if ( text !== this._weatherText ) {
+
+			this._weatherText = text;
+			this.weatherText.textContent = text;
+
+		}
+
+		const ic = w.icon || 'cloud';
+		if ( ic !== this._weatherIc ) {
+
+			this._weatherIc = ic;
+			this.weatherIco.innerHTML = icon( ic );
+
+		}
+
+	}
+
 	// setPrompt( 'E', 'Board boat' ) shows it; setPrompt( null ) hides it.
 	setPrompt( key, text ) {
 
@@ -2802,6 +3093,73 @@ export class UI {
 			this.bCard.setAttribute( 'transform', `rotate(${ ( - hdg ).toFixed( 1 ) } 50 50)` );
 			this.bHdgText.textContent = `${ String( Math.round( hdg ) % 360 ).padStart( 3, '0' ) }°`;
 			this.bHdgCard.textContent = CARDINALS[ Math.round( hdg / 45 ) % 8 ];
+
+		}
+
+	}
+
+	setVehicleGauges( g = {} ) {
+
+		if ( ! this.vehicleEl ) return;
+		const vis = !! g.visible;
+		if ( vis !== !! this._vehOn ) {
+
+			this._vehOn = vis;
+			this.vehicleEl.classList.toggle( 'is-on', vis );
+
+		}
+
+		if ( ! vis ) return;
+
+		const spd = String( Math.round( Math.abs( Number( g.speedKmh ) || 0 ) ) );
+		if ( spd !== this._vSpd ) {
+
+			this._vSpd = spd;
+			this.vSpeed.textContent = spd;
+
+		}
+
+		const rpm = clamp( Number( g.rpm ) || 0, 0, 1 );
+		const maxRpm = Number( g.maxRpm ) || 7800;
+		const rq = Math.round( rpm * 1000 );
+		if ( rq !== this._vRpm ) {
+
+			this._vRpm = rq;
+			this.vArc.setAttribute( 'stroke-dasharray', `${ ( rpm * 100 ).toFixed( 2 ) } 100` );
+			const a = ( 135 + 270 * rpm ) * Math.PI / 180;
+			this.vHead.setAttribute( 'cx', ( 60 + 50 * Math.cos( a ) ).toFixed( 2 ) );
+			this.vHead.setAttribute( 'cy', ( 60 + 50 * Math.sin( a ) ).toFixed( 2 ) );
+			this.vehicleEl.classList.toggle( 'is-redline', rpm > 0.84 );
+			this.vRpmText.textContent = `${ Math.round( rpm * maxRpm ) } rpm`;
+
+		}
+
+		const gear = String( g.gear || 'N' );
+		if ( gear !== this._vGear ) {
+
+			this._vGear = gear;
+			this.vGear.textContent = gear;
+			this.vGear.classList.toggle( 'is-rev', gear === 'R' );
+
+		}
+
+		const lit = !! g.headlight;
+		if ( lit !== !! this._vLit ) {
+
+			this._vLit = lit;
+			this.vLight.classList.toggle( 'is-lit', lit );
+
+		}
+
+		const stalled = !! g.waterStalled;
+		const drift = ( g.drift || 0 ) > 0.35;
+		const tag = stalled ? tr( 'Stalled · R' ) : drift ? tr( 'Drift' ) : trSurface( g.surface );
+		if ( tag !== this._vSurf ) {
+
+			this._vSurf = tag;
+			this.vSurf.textContent = tag;
+			this.vSurf.classList.toggle( 'is-warn', stalled );
+			this.vSurf.classList.toggle( 'is-drift', ! stalled && drift );
 
 		}
 
@@ -3147,13 +3505,82 @@ export class UI {
 
 	}
 
-	// The photo-mode hint shows briefly, then gets out of the shot.
+	// The photo-mode toolbar shows briefly on hover / input, then fades out.
 	_pokePhotoHint() {
 
 		if ( ! this._photo ) return;
 		this.photoHint.classList.add( 'is-on' );
 		clearTimeout( this._photoT );
-		this._photoT = setTimeout( () => this.photoHint.classList.remove( 'is-on' ), 2400 );
+		this._photoT = setTimeout( () => this.photoHint.classList.remove( 'is-on' ), 3200 );
+
+	}
+
+	setPhotoFov( fovDeg ) {
+
+		if ( ! this.photoFovEl ) return;
+		const f = clamp( Math.round( Number( fovDeg ) || 62 ), 20, 100 );
+		const eqMm = Math.round( 12 / Math.tan( f * Math.PI / 360 ) );
+		this.photoFovEl.textContent = `${ eqMm } mm · ${ f }°`;
+
+	}
+
+	flashShutter() {
+
+		if ( ! this.shutterEl ) return;
+		this.shutterEl.classList.remove( 'is-flash' );
+		void this.shutterEl.offsetWidth;
+		this.shutterEl.classList.add( 'is-flash' );
+
+	}
+
+	applyLanguage() {
+
+		if ( this.panel ) this.panel.setAttribute( 'aria-label', tr( 'Settings' ) );
+		if ( this.panelTitleEl ) this.panelTitleEl.textContent = tr( 'Settings' );
+		if ( this.langBtn ) this.langBtn.textContent = getLang() === 'zh' ? 'EN' : '中文';
+		for ( const b of this._panelActionBtns || [] ) {
+
+			const tip = tr( b._rawTip );
+			b.setAttribute( 'aria-label', tip );
+			b.dataset.tip = tip;
+
+		}
+
+		if ( this.panelFootEl ) {
+
+			this.panelFootEl.innerHTML = `<span><kbd>H</kbd>${ esc( tr( 'Hide' ) ) }</span><span><kbd>F1</kbd>${ esc( tr( 'Controls' ) ) }</span><span><kbd>P</kbd>${ esc( tr( 'Photo mode' ) ) }</span>`;
+
+		}
+
+		if ( this.rail ) this.rail.setAttribute( 'aria-label', tr( 'Settings' ) );
+		if ( this.railOpenBtn ) {
+
+			this.railOpenBtn.setAttribute( 'aria-label', tr( 'Open settings' ) );
+			this.railOpenBtn.dataset.tip = tr( 'Settings (H)' );
+
+		}
+
+		if ( this.railHelpBtn ) {
+
+			this.railHelpBtn.setAttribute( 'aria-label', tr( 'Controls' ) );
+			this.railHelpBtn.dataset.tip = tr( 'Controls (F1)' );
+
+		}
+
+		if ( this.depthLab ) this.depthLab.textContent = tr( 'Depth' );
+		if ( this.bUnitEl ) this.bUnitEl.textContent = tr( 'knots' );
+		if ( this.vLight ) this.vLight.dataset.tip = tr( 'Headlight (L)' );
+		if ( this.photoShotLbl ) this.photoShotLbl.textContent = `${ tr( 'Take photo' ) } (F2)`;
+		if ( this.photoExitLbl ) this.photoExitLbl.textContent = tr( 'Exit photo mode' );
+
+		this._populateHelp();
+		this._populateStart();
+		for ( const tab of this.tabs.values() ) tab.relocalize?.();
+		this._mode = null;
+		this._weatherText = null;
+		this._pKey = null;
+		this._pText = null;
+		this._vSurf = null;
 
 	}
 
@@ -3238,7 +3665,7 @@ export class UI {
 
 			ld.status = String( status );
 			if ( ld.statusEl ) ld.statusEl.textContent = ld.status;
-			L.classList.toggle( 'is-compiling', /shader/i.test( ld.status ) );
+			L.classList.toggle( 'is-compiling', /shader|着色器/i.test( ld.status ) );
 
 		}
 
@@ -3256,7 +3683,7 @@ export class UI {
 
 	}
 
-	setLoadingError( message ) {
+	setLoadingError( message, detailsHtml = '' ) {
 
 		const L = document.getElementById( 'loader' );
 		if ( ! L ) return;
@@ -3266,6 +3693,22 @@ export class UI {
 		ld.status = String( message );
 		if ( ld.statusEl ) ld.statusEl.textContent = ld.status;
 		ld.stopped = true;
+		const panel = L.querySelector( '.loader-panel' );
+		if ( panel ) {
+
+			panel.querySelector( '.loader-error-box' )?.remove();
+			if ( detailsHtml ) {
+
+				const box = h( 'div', 'loader-error-box' );
+				box.innerHTML = detailsHtml;
+				const btn = h( 'button', 'loader-reload', { type: 'button', text: tr( 'Reload' ) } );
+				btn.addEventListener( 'click', () => location.reload() );
+				box.append( btn );
+				panel.append( box );
+
+			}
+
+		}
 
 	}
 
@@ -3322,7 +3765,7 @@ export class UI {
 		const L = document.getElementById( 'loader' );
 		if ( ! L ) return Promise.resolve();
 		if ( this._loaderGone ) return this._loaderGone;
-		this.setLoading( 1, 'Ready' );
+		this.setLoading( 1, tr( 'Ready' ) );
 		L.classList.remove( 'is-compiling' );
 		L.classList.add( 'tw-hidden' );
 		this._loaderGone = new Promise( ( resolve ) => setTimeout( () => {
@@ -3358,6 +3801,7 @@ export class UI {
 
 		clearInterval( this._timer );
 		this._ac.abort();
+		this._unsubLang?.();
 		for ( const t of this._toasts ) clearTimeout( t.timer );
 		this._closeMenu();
 		this.root.remove();

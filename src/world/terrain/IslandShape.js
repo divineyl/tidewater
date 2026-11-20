@@ -85,6 +85,17 @@ export const PATHS = [
 	{ w: 0.9, pts: [ [ 88, - 62 ], [ 80, - 72 ], [ 70, - 80 ], [ 60, - 86 ], [ 54.5, - 90 ] ] },
 	// west: along the back of the beach to the western grove
 	{ w: 0.8, pts: [ [ 18, - 62 ], [ 5, - 68 ], [ - 12, - 73 ], [ - 30, - 77 ], [ - 50, - 80 ], [ - 72, - 84 ] ] },
+	// east headland scenic dirt road: connects eastern village boathouse path to the Lighthouse overlook
+	{
+		road: true,
+		w: 2.6,
+		shoulder: 9.0,
+		pts: [
+			[ 88, - 62 ], [ 112, - 74 ], [ 142, - 80 ], [ 174, - 80 ],
+			[ 196, - 68 ], [ 208, - 42 ], [ 216, - 12 ], [ 228, 18 ],
+			[ 246, 44 ], [ 266, 68 ], [ 282, 92 ], [ 296, 114 ],
+		],
+	},
 ];
 
 // distance from (x, z) to a polyline; returns [distance, arc length position of the closest point]

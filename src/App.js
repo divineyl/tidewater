@@ -1,7 +1,10 @@
 import { Vector3, Euler, Color, MathUtils, Mesh } from './engine/index.js';
 import { GPU } from './engine/gpu/GPU.js';
+import { Texture } from './engine/gpu/Texture.js';
 import { SunShadows } from './engine/render/Shadows.js';
 import { FrameUniforms } from './engine/render/Frame.js';
+import { createPrefsStore, sanitizeVehiclePose } from './core/Prefs.js';
+import { tr } from './i18n/i18n.js';
 
 import { Engine } from './core/Engine.js';
 import { Input } from './core/Input.js';
@@ -25,6 +28,7 @@ import { computeShoreField } from './world/ShoreField.js';
 import { WORLD } from './world/WorldLayout.js';
 import { Colliders } from './world/Colliders.js';
 import { Village } from './world/Village.js';
+import { Lighthouse } from './world/Lighthouse.js';
 import { Reef } from './world/Reef.js';
 import { BoatModel } from './world/BoatModel.js';
 import { Rocks } from './world/Rocks.js';
@@ -42,7 +46,16 @@ import { Caustics } from './ocean/Caustics.js';
 import { installUnderwaterLighting } from './ocean/UnderwaterLighting.js';
 import { RefractionPass } from './ocean/RefractionPass.js';
 import { installGroundBounce } from './materials/GroundBounce.js';
-import { LocalLights, addVillageLights, addBoatLights } from './materials/LocalLights.js';
+import { LocalLights, addVillageLights, addBoatLights, addVehicleLights } from './materials/LocalLights.js';
+import { addLighthouseLights } from './world/Lighthouse.js';
+import { VehicleManager } from './vehicles/VehicleManager.js';
+import { Motorcycle } from './vehicles/Motorcycle.js';
+import { MotorcycleModel } from './vehicles/MotorcycleModel.js';
+import { CoastalBuggy } from './vehicles/CoastalBuggy.js';
+import { BuggyModel } from './vehicles/BuggyModel.js';
+import { VehicleFX } from './fx/VehicleFX.js';
+import { GroundInteraction } from './fx/GroundInteraction.js';
+import { WaypointBeacon } from './fx/WaypointBeacon.js';
 import { WaterQuery } from './ocean/WaterQuery.js';
 import { Breakers } from './ocean/Breakers.js';
 import { SurfFoam } from './ocean/SurfFoam.js';
@@ -65,8 +78,18 @@ import { WakeSim } from './ocean/WakeSim.js';
 import { Vegetation } from './world/Vegetation.js';
 import { SoundScape } from './audio/SoundScape.js';
 import { updateCameraVelocity, useStaticVelocity } from './post/CameraVelocity.js';
+import { WeatherSystem } from './weather/WeatherSystem.js';
+import { Rain } from './fx/Rain.js';
+import { Lightning } from './fx/Lightning.js';
 
 const _up = new Vector3( 0, 1, 0 );
+
+export const QUALITY_PRESETS = {
+	eco: { renderScale: 0.65, aa: 4, shadows: false, ssr: false, ao: 0, motionBlur: 0, sharpen: 0.4, shaftScale: 0 },
+	balanced: { renderScale: 0.8, aa: 8, shadows: true, ssr: true, ao: 0.65, motionBlur: 0, sharpen: 0.45, shaftScale: 0.75 },
+	high: { renderScale: 1.0, aa: 8, shadows: true, ssr: true, ao: 1.0, motionBlur: 0.5, sharpen: 0.45, shaftScale: 1.0 },
+	ultra: { renderScale: 1.0, aa: 16, shadows: true, ssr: true, ao: 1.25, motionBlur: 0.5, sharpen: 0.55, shaftScale: 1.3 },
+};
 
 export class App {
 
@@ -80,6 +103,14 @@ export class App {
 			renderScale: 1, // internal resolution (the temporal upscaler reconstructs the output), Performance tab
 		};
 		this.qs = new URLSearchParams( location.search );
+		this.prefs = createPrefsStore();
+		this.qualityPreset = 'high';
+		this.qualityShaftScale = 1;
+		this._photoShotRequested = false;
+		this._photoShotBusy = false;
+		this._photoShotTex = null;
+		this._savedFovBeforePhoto = null;
+		this._poseSaveT = 0;
 
 	}
 
@@ -107,6 +138,11 @@ export class App {
 		this.camera = camera;
 
 		this.input = new Input( engine.domElement );
+		this.input.onGamepadChange = ( connected ) => {
+
+			if ( this.ui ) this.ui.ui.toast( tr( connected ? 'Gamepad connected' : 'Gamepad disconnected' ) );
+
+		};
 		this.fly = new FlyCamera( camera, engine.domElement, this.input );
 		this.fly.setPose( new Vector3( 20, 6, - 20 ), Math.PI * 0.9, - 0.12 );
 
@@ -140,10 +176,12 @@ export class App {
 		// data is derived (shore field, GPU textures, meshes)
 		await progress( 0.12, 'Building the village…' );
 		this.village = new Village( { scene, terrain: this.terrainData, colliders: this.colliders } );
+		this.lighthouse = new Lighthouse( { scene, terrain: this.terrainData, colliders: this.colliders, village: this.village } );
+		this.groundInteraction = new GroundInteraction();
 		if ( ! qs.has( 'noVeg' ) ) {
 
 			await progress( 0.14, 'Planting the island…' );
-			this.vegetation = new Vegetation( { scene, terrain: this.terrainData, village: this.village } );
+			this.vegetation = new Vegetation( { scene, terrain: this.terrainData, village: this.village, groundInteraction: this.groundInteraction } );
 			useStaticVelocity( this.vegetation.group );
 
 		}
@@ -152,7 +190,7 @@ export class App {
 		this.shoreField = computeShoreField( this.terrainData, { res: 512, swellDir: [ WORLD.swellDir.x, WORLD.swellDir.y ] } );
 		this.terrainGPU = new TerrainGPU( this.terrainData, this.shoreField );
 		// terrain and rocks apply the heightfield sun shadow (long hill shadows) in their own lighting
-		this.terrain = new Terrain( { scene, terrainData: this.terrainData, terrainGPU: this.terrainGPU, renderer } );
+		this.terrain = new Terrain( { scene, terrainData: this.terrainData, terrainGPU: this.terrainGPU, renderer, groundInteraction: this.groundInteraction } );
 		this.rocks = new Rocks( { scene, terrain: this.terrain, village: this.village, colliders: this.colliders } );
 		// driftwood (CC0 photoscans), wrack, pebbles and village clutter
 		this.debris = new Debris( { scene, terrain: this.terrain, village: this.village, vegetation: this.vegetation, rocks: this.rocks, colliders: this.colliders } );
@@ -167,6 +205,26 @@ export class App {
 		scene.add( this.boat.group );
 		this.boat.group.position.copy( WORLD.boatDock.position );
 		this.boat.group.rotation.y = WORLD.boatDock.heading;
+
+		this.vehicleManager = new VehicleManager( { terrain: this.terrainData, colliders: this.colliders } );
+		this.motorcycleModel = new MotorcycleModel();
+		scene.add( this.motorcycleModel.group );
+		this.motorcycle = new Motorcycle( {
+			model: this.motorcycleModel,
+			terrain: this.terrainData,
+			colliders: this.colliders,
+			query: null,
+		} );
+		this.vehicleManager.register( this.motorcycle );
+		this.buggyModel = new BuggyModel();
+		scene.add( this.buggyModel.group );
+		this.buggy = new CoastalBuggy( {
+			model: this.buggyModel,
+			terrain: this.terrainData,
+			colliders: this.colliders,
+			query: null,
+		} );
+		this.vehicleManager.register( this.buggy );
 
 		// ---------------------------------------------------------------- ocean
 		await progress( 0.3, 'Simulating the ocean…' );
@@ -214,7 +272,10 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		} );
 		underwaterMode( this.village.group, 'lite' );
+		underwaterMode( this.lighthouse.staticGroup, 'lite' );
 		underwaterMode( this.boat.group, 'lite' );
+		underwaterMode( this.motorcycleModel.group, 'lite' );
+		underwaterMode( this.buggyModel.group, 'lite' );
 		if ( this.vegetation ) underwaterMode( this.vegetation.group, 'none' );
 
 		this.underwaterLighting = installUnderwaterLighting( {
@@ -234,6 +295,10 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.localLights = new LocalLights();
 		addVillageLights( this.localLights, this.village );
 		addBoatLights( this.localLights, this.boat );
+		addVehicleLights( this.localLights, this.motorcycle );
+		addVehicleLights( this.localLights, this.buggy );
+		addLighthouseLights( this.localLights, this.lighthouse );
+		useStaticVelocity( this.lighthouse.staticGroup );
 		// rough, large or heavily overdrawn surfaces (ground, rocks, debris, foliage) take the local
 		// lights as Lambert only; the village, pier and boat get the full BRDF (glints on wet wood, metal)
 		for ( const root of [ this.terrain.mesh, this.rocks.group, this.debris && this.debris.group, this.vegetation && this.vegetation.group ] ) if ( root ) root.traverse( ( o ) => {
@@ -307,7 +372,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// interactive wake around the boat (Kelvin pattern, bow/stern waves, prop wash foam)
 		this.wake = new WakeSim( renderer, { terrainGPU: this.terrainGPU, boat: this.boatCtl, colliders: this.colliders } );
 		this.surface.wake = this.wake;
-		this.player = new Player( { camera, input: this.input, terrain: this.terrainData, colliders: this.colliders, query: this.query, boat: this.boatCtl, reef: this.reef } );
+		this.player = new Player( { camera, input: this.input, terrain: this.terrainData, colliders: this.colliders, query: this.query, boat: this.boatCtl, vehicles: this.vehicleManager, reef: this.reef } );
 		// birds, beach crabs, sanderlings (after spray / query / boat, which they use)
 		this.wildlife = new Wildlife( {
 			scene, renderer, terrain: this.terrainData, terrainGPU: this.terrainGPU, shore: this.shore,
@@ -339,8 +404,10 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// recorded field recordings (public/audio, credits in public/audio/CREDITS.md); ?noAudio turns it off
 		this.audio = qs.has( 'noAudio' ) ? null : new SoundScape();
 		this.player.audio = this.audio;
+		this.waypointBeacon = new WaypointBeacon( { scene, terrain: this.terrainData } );
 		// the fishing game (rod, bites, catch, cooler, fish stand)
 		this.game = new Game( this );
+		this.game.applyGear();
 		// the lanterns at Joe's fish stand and Marta's chandlery (lit from dusk like the village lamps);
 		// positions are in each stall's frame (x right, z toward the customer), turned by its yaw
 		for ( const [ s, lx, ly, lz ] of [ [ STAND, - 0.9, 1.85, 0.1 ], [ CHANDLERY, - 0.75, 1.58, - 1.45 ] ] ) {
@@ -352,9 +419,17 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		}
 
 		this.boatCtl.onSlam = ( s ) => this.audio && this.audio.hullSlap( s );
+		this.motorcycle.onLand = ( impact ) => this.audio && this.audio.vehicleLand( impact );
+		this.motorcycle.onShiftPop = ( lvl ) => this.audio && this.audio.vehicleShiftPop( lvl );
+		this.motorcycle.onSplash = ( str, pos ) => this.audio && this.audio.splash( str, pos );
+		this.buggy.onLand = ( impact ) => this.audio && this.audio.vehicleLand( impact );
+		this.buggy.onShiftPop = ( lvl ) => this.audio && this.audio.vehicleShiftPop( lvl );
+		this.buggy.onSplash = ( str, pos ) => this.audio && this.audio.splash( str, pos );
+		this.vehicleFX = new VehicleFX( { spray: this.spray, vehicles: this.vehicleManager, terrain: this.terrainData } );
+		scene.add( this.vehicleFX.mesh );
 		engine.domElement.addEventListener( 'click', () => {
 
-			if ( window.__ui && window.__ui.isPointerOverUI ) return;
+			if ( ( window.__ui && window.__ui.isPointerOverUI ) || this.isModalOpen() ) return;
 			this.input.requestLock();
 			if ( this.audio ) this.audio.resume();
 
@@ -366,6 +441,21 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.profiler.track( 'sky view', this.atmosphere.skyViewKernel );
 
 		this.updateSun();
+		this.rain = new Rain( { terrain: this.terrainGPU, clouds: this.clouds } );
+		scene.add( this.rain.mesh );
+		this.lightning = new Lightning( {
+			clouds: this.clouds,
+			onThunder: ( pos, dist, str ) => this.audio && this.audio.thunder( pos.x, pos.y, pos.z, dist, str ),
+		} );
+		scene.add( this.lightning.mesh );
+		this.weather = new WeatherSystem( this );
+		this.applySavedPrefs( { scaleOverride: qs.has( 'scale' ) } );
+		if ( typeof window !== 'undefined' ) {
+
+			window.addEventListener( 'beforeunload', () => this.saveRuntimeState( true ) );
+
+		}
+
 		installDebugViews( this );
 		window.__app = this;
 		this.gpu = GPU; // console / test access
@@ -446,7 +536,8 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// below the horizon the moon takes over as the key light
 		const night = MathUtils.smoothstep( - dir.y, 0.02, 0.18 );
 		G.night.value = night;
-		this.sky.starIntensity.value = night;
+		const starVis = this.weather ? this.weather.state.starVisibility : 1;
+		this.sky.starIntensity.value = night * starVis;
 		const moon = new Vector3( - dir.x, Math.abs( dir.y ) * 0.8 + 0.25, - dir.z ).normalize();
 		this.sky.moonDir.value.copy( moon );
 
@@ -472,6 +563,18 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		const irr = a.skyIrradiance;
 		const nightAmb = 0.012 * G.night.value;
 		G.skyIrradiance.value.setRGB( irr[ 0 ] + nightAmb * 0.6, irr[ 1 ] + nightAmb * 0.7, irr[ 2 ] + nightAmb );
+		const flash = this.lightning ? this.lightning.flash : 0;
+		if ( flash > 0.002 ) {
+
+			G.sunColor.value.r += flash * 1.1;
+			G.sunColor.value.g += flash * 1.25;
+			G.sunColor.value.b += flash * 1.55;
+			G.skyIrradiance.value.r += flash * 0.28;
+			G.skyIrradiance.value.g += flash * 0.34;
+			G.skyIrradiance.value.b += flash * 0.45;
+
+		}
+
 		G.horizonColor.value.setRGB( a.horizon[ 0 ], a.horizon[ 1 ], a.horizon[ 2 ] );
 
 	}
@@ -495,9 +598,21 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 			this.ui.s.advance = s.timeSpeed !== 0;
 			this.ui.ui.refresh();
-			this.ui.ui.toast( s.timeSpeed !== 0 ? 'Time running' : 'Time paused' );
+			this.ui.ui.toast( tr( s.timeSpeed !== 0 ? 'Time running' : 'Time paused' ) );
 
 		}
+
+	}
+
+	isModalOpen() {
+
+		const u = this.ui?.ui;
+		if ( u && ( u._start || u._help ) ) return true;
+		const g = this.game;
+		if ( g?.hud && ( g.hud.invOpen || g.hud.standOpen ) ) return true;
+		if ( g?.minimap && g.minimap.fullOpen ) return true;
+		if ( g?.guide && g.guide.open ) return true;
+		return false;
 
 	}
 
@@ -506,15 +621,35 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		if ( on === this.freeCam ) return;
 		this.freeCam = on;
+		this.input.resetLook();
 		if ( on ) {
+
+			if ( this.player.mode === 'vehicle' ) {
+
+				this.player.clearVehicleFov();
+				if ( this.motorcycleModel ) this.motorcycleModel.setRiderVisible( this.motorcycle.showRider );
+				if ( this.buggyModel ) this.buggyModel.setRiderVisible( this.buggy.showRider );
+
+			}
 
 			const e = new Euler().setFromQuaternion( this.camera.quaternion, 'YXZ' );
 			this.fly.setPose( this.camera.position.clone(), e.y, e.x );
 			this.fly.velocity.set( 0, 0, 0 );
 
-		} else if ( this.player.mode !== 'boat' && this.player.mode !== 'deck' ) {
+		} else {
 
-			this.dropPlayerAtCamera();
+			if ( this.player ) {
+
+				this.player.camInit = false;
+				this.player.vehCamInit = false;
+
+			}
+
+			if ( this.player.mode !== 'boat' && this.player.mode !== 'deck' && this.player.mode !== 'vehicle' ) {
+
+				this.dropPlayerAtCamera();
+
+			}
 
 		}
 
@@ -605,29 +740,80 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		G.time.value += dt;
 		if ( s.timeSpeed !== 0 ) s.timeOfDay = ( s.timeOfDay + dt * s.timeSpeed + 24 ) % 24;
 
-		// ---- player / boat (boat physics first so the cameras follow this frame's pose)
-		if ( this.input.hit( 'KeyF' ) ) this.setFreeCam( ! this.freeCam );
-		if ( this.input.hit( 'KeyT' ) ) this.toggleTime();
-		if ( this.input.hit( 'KeyL' ) ) {
+		this.input.pollGamepad( dt );
+		const modalOpen = this.isModalOpen();
+		this.input.setLookBlocked( modalOpen );
+		if ( modalOpen !== !! this._wasModalOpen ) {
 
-			const on = this.localLights.toggleFlashlight();
-			if ( this.ui ) this.ui.ui.toast( on ? 'Flashlight on' : 'Flashlight off' );
+			this.input.resetLook();
+			this._wasModalOpen = modalOpen;
 
 		}
 
-		if ( this.input.hit( 'KeyM' ) && this.audio ) {
+		// ---- player / boat (boat physics first so the cameras follow this frame's pose)
+		if ( ! modalOpen ) {
 
-			this.audio.setMuted( ! this.audio.muted );
-			if ( this.ui ) this.ui.ui.toast( this.audio.muted ? 'Sound off' : 'Sound on' );
+			if ( this.input.hit( 'KeyF' ) ) this.setFreeCam( ! this.freeCam );
+			if ( this.input.hit( 'KeyT' ) ) this.toggleTime();
+			if ( this.input.hit( 'KeyL' ) ) {
+
+				if ( ! this.freeCam && this.player.mode === 'vehicle' && this.player.activeVehicle ) {
+
+					const on = this.player.activeVehicle.toggleHeadlight();
+					if ( this.prefs ) this.prefs.save( { vehHeadlight: on } );
+					if ( this.ui ) this.ui.ui.toast( tr( on ? 'Headlight on' : 'Headlight off' ) );
+
+				} else {
+
+					const on = this.localLights.toggleFlashlight();
+					if ( this.ui ) this.ui.ui.toast( tr( on ? 'Flashlight on' : 'Flashlight off' ) );
+
+				}
+
+			}
+
+			if ( this.input.hit( 'KeyM' ) && this.audio ) {
+
+				this.audio.setMuted( ! this.audio.muted );
+				if ( this.prefs ) this.prefs.save( { audioMuted: this.audio.muted } );
+				if ( this.ui ) this.ui.ui.toast( tr( this.audio.muted ? 'Sound off' : 'Sound on' ) );
+
+			}
+
+		}
+
+		const idleMoto = this.motorcycle && ! this.motorcycle.occupied && ! this.motorcycle.waterStalled && this.motorcycle.speed < 0.5;
+		const idleBuggy = this.buggy && ! this.buggy.occupied && ! this.buggy.waterStalled && this.buggy.speed < 0.5;
+		if ( idleMoto || idleBuggy ) {
+
+			this._poseSaveT += dt;
+			if ( this._poseSaveT >= 4 ) {
+
+				this._poseSaveT = 0;
+				this.saveRuntimeState( false );
+
+			}
 
 		}
 		this.boatCtl.update( dt );
+		if ( this.vehicleManager ) this.vehicleManager.update( dt );
 		this.boatSpray.update( dt );
 		this.wake.update( dt );
+		const prevEnabled = this.input.enabled;
+		if ( modalOpen ) this.input.enabled = false;
 		if ( this.freeCam ) this.fly.update( dt );
 		else this.player.update( dt );
+		this.input.enabled = prevEnabled;
 		this.game.update( dt );
 		this.updateSun();
+		if ( this.weather ) this.weather.update( dt );
+		if ( this.lightning ) {
+
+			this.lightning.update( dt, this.camera, this.weather ? this.weather.state.lightningRate : 0, this.weather ? this.weather.state.cloudAltitude : 1100 );
+			G.weather.value.w = this.lightning.flash;
+			if ( this.clouds && this.clouds.setLightning ) this.clouds.setLightning( this.lightning.cloudLight );
+
+		}
 
 		this.atmosphere.update( dt, this.camera.position.y );
 		this.applyAtmosphereReadback();
@@ -652,12 +838,73 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// drawn while any part of the view can be under water (the specks above the surface are dropped)
 		this.marineSnow.update( this.camera, this.camera.position.y < ( this.cameraWaterHeight ?? 0 ) + LENS_REACH );
 		this.airMotes.update( dt, this.camera, this.cameraWaterHeight ?? 0 );
+		if ( this.rain ) this.rain.update( dt, this.camera, this.cameraWaterHeight ?? 0 );
 		if ( this.shoreSim ) this.shoreSim.update();
 		this.underwaterLighting.update( this.camera );
 		this.breakers.update( this.camera );
+		if ( this.vehicleFX ) this.vehicleFX.update( dt );
 		this.spray.update();
 		if ( this.clouds ) this.clouds.update( dt, this.camera );
 		this.environment.update( dt );
+
+		// ---- ground interaction & waypoint beacon
+		if ( this.groundInteraction ) {
+
+			const gi = this.groundInteraction;
+			const focus = ( this.player.mode === 'vehicle' && this.player.activeVehicle )
+				? this.player.activeVehicle.position
+				: ( this.freeCam ? this.camera.position : this.player.position );
+			if ( ! this.freeCam && this.player.mode === 'walk' && this.player.grounded && this.player.surface !== 'wood' && this.player.surface !== 'water' ) {
+
+				const pvx = this.player.velocity.x, pvz = this.player.velocity.z;
+				const pspd = Math.hypot( pvx, pvz );
+				if ( pspd > 0.12 ) gi.stampFoot( this.player.position.x, this.player.position.z, pvx, pvz, pspd );
+
+			}
+
+			this._parkStampT = ( this._parkStampT || 0 ) + dt;
+			const parkPulse = this._parkStampT >= 0.5;
+			if ( parkPulse ) this._parkStampT = 0;
+			const vehList = this.vehicleManager ? this.vehicleManager.vehicles : ( this.motorcycle ? [ this.motorcycle ] : [] );
+			for ( const m of vehList ) {
+
+				if ( ! m || m.airborne ) continue;
+				const mspd = Math.abs( m.speed );
+				const moving = mspd > 0.15;
+				if ( moving || parkPulse ) {
+
+					const trackable = m.surface === 'sand' || m.surface === 'path' || m.surface === 'grass';
+					const rainBoost = 1 + G.weather.value.y * 0.35;
+					const driftBoost = ( m.driftAmount > 0.25 || m.handbrake ) ? 1.35 : 1.0;
+					const baseTrack = m.surface === 'sand' ? 0.92 : m.surface === 'path' ? 0.78 : 0.60;
+					const trackStr = ( moving && trackable ) ? Math.min( 1, baseTrack * rainBoost * driftBoost ) : 0;
+					const vx = m.velocity.x, vz = m.velocity.z;
+					if ( m.wheelWorlds && m.wheelWorlds.length ) {
+
+						for ( let wi = 0; wi < m.wheelWorlds.length; wi ++ ) {
+
+							const w = m.wheelWorlds[ wi ];
+							const isRear = wi >= 2;
+							gi.stampWheel( w.x, w.z, vx, vz, { radius: isRear ? 0.68 : 0.58, grass: 1.0, track: trackStr * ( isRear ? 1.0 : 0.82 ) } );
+
+						}
+
+					} else {
+
+						gi.stampWheel( m.frontWheelWorld.x, m.frontWheelWorld.z, vx, vz, { radius: 0.56, grass: 0.95, track: trackStr * 0.78 } );
+						gi.stampWheel( m.rearWheelWorld.x, m.rearWheelWorld.z, vx, vz, { radius: 0.68, grass: 1.0, track: trackStr } );
+
+					}
+
+				}
+
+			}
+
+			gi.update( dt, focus.x, focus.z, this.weather ? this.weather.state.rainIntensity : 0 );
+
+		}
+
+		if ( this.waypointBeacon ) this.waypointBeacon.update( dt, this.camera.position );
 
 		// ---- world
 		this.oceanLOD.update( this.camera );
@@ -666,6 +913,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.debris.update( this.camera );
 		this.reef.update( dt, this.camera.position );
 		this.village.update( dt );
+		if ( this.lighthouse ) this.lighthouse.update( dt );
 		if ( this.vegetation ) this.vegetation.update( dt, this.camera );
 		if ( this.whale ) this.whale.update( dt, this.camera );
 		this.boat.update( dt );
@@ -675,7 +923,16 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// ---- render
 		G.exposure.value = s.exposure;
 		updateCameraVelocity( this.camera );
-		this.post.lens.update( dt, this.camera.position.y < ( this.cameraWaterHeight ?? 0 ) );
+		const camFwd = this._camFwd || ( this._camFwd = new Vector3() );
+		this.camera.getWorldDirection( camFwd );
+		const lookPitch = Math.asin( MathUtils.clamp( camFwd.y, - 1, 1 ) );
+		this.post.lens.update(
+			dt,
+			this.camera.position.y < ( this.cameraWaterHeight ?? 0 ),
+			this.weather ? this.weather.state.rainIntensity : 0,
+			this.player.mode === 'boat' && this.player.camMode === 'first',
+			lookPitch
+		);
 		if ( this.post.flare ) {
 
 			this.post.flare.setDepthHeight( this.sceneRenderer.sceneRT.height );
@@ -690,8 +947,44 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.shadows.render( this.scene, this.engine.meshRenderer, this.shadows.update( this.camera, G.sunDir.value ) );
 		this.sceneRenderer.render();
 		if ( this.post.flare ) this.post.flare.kernel.dispatch( 1 );
+
+		const capturing = this._photoShotRequested && ! this._photoShotBusy;
+		let capTex = null, capCur = null, capBuf = null, capW = 0, capH = 0, capPadded = 0;
+		if ( capturing ) {
+
+			this._photoShotRequested = false;
+			this._photoShotBusy = true;
+			capCur = this.engine.currentTexture();
+			capW = capCur.width;
+			capH = capCur.height;
+			if ( ! this._photoShotTex || this._photoShotTex.width !== capW || this._photoShotTex.height !== capH || this._photoShotTex.format !== GPU.format ) {
+
+				if ( this._photoShotTex ) this._photoShotTex.destroy();
+				this._photoShotTex = new Texture( { width: capW, height: capH, format: GPU.format, usage: [ 'render', 'copySrc', 'sample' ], label: 'photo capture' } );
+
+			}
+
+			capTex = this._photoShotTex;
+			this.post.outputTexture = capTex;
+
+		}
+
 		this.post.render();
 		this.post.endFrame();
+
+		if ( capturing && capTex && capCur ) {
+
+			this.post.outputTexture = null;
+			const enc = GPU.getEncoder();
+			const gpuTex = capTex.getGPU();
+			enc.copyTextureToTexture( { texture: gpuTex }, { texture: capCur }, { width: capW, height: capH, depthOrArrayLayers: 1 } );
+			capPadded = Math.ceil( capW * 4 / 256 ) * 256;
+			capBuf = GPU.device.createBuffer( { label: 'photo staging', size: capPadded * capH, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST } );
+			enc.copyTextureToBuffer( { texture: gpuTex }, { buffer: capBuf, bytesPerRow: capPadded, rowsPerImage: capH }, { width: capW, height: capH, depthOrArrayLayers: 1 } );
+			GPU.onSubmit( null, () => this._finishPhotoCapture( capBuf, capW, capH, capPadded, GPU.format ) );
+
+		}
+
 		GPU.submit();
 		this.profiler.update( dt );
 
@@ -709,6 +1002,232 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.settings.renderScale = scale;
 		this.post.setScale( scale );
 		if ( this.clouds ) this.clouds.resolutionScale = scale;
+
+	}
+
+	applyQualityPreset( id, save = true ) {
+
+		const p = QUALITY_PRESETS[ id ];
+		if ( ! p ) return;
+		this.qualityPreset = id;
+		this.setRenderScale( p.renderScale );
+		this.post.aaMode = p.aa > 0 ? 'taa' : 'none';
+		if ( p.aa > 0 ) this.post.taau.jitterPhaseOverride = p.aa;
+		this.shadows.enabled = p.shadows;
+		if ( this.waterMaterial ) this.waterMaterial.params.ssr.value = p.ssr ? 1 : 0;
+		this.post.params.aoStrength.value = p.ao;
+		if ( this.post.motionBlur ) this.post.motionBlur.shutter.value = p.motionBlur;
+		this.post.params.sharpen.value = p.sharpen;
+		this.qualityShaftScale = p.shaftScale;
+		if ( this.weather ) this.weather.applyToSystems( 0, true );
+		if ( save && this.prefs ) {
+
+			this.prefs.save( { qualityPreset: id, renderScale: p.renderScale, aa: p.aa, shadows: p.shadows, ssr: p.ssr } );
+
+		}
+
+	}
+
+	applySavedPrefs( { scaleOverride = false } = {} ) {
+
+		if ( ! this.prefs ) return;
+		const p = this.prefs.data;
+		if ( p.qualityPreset && p.qualityPreset !== 'custom' && QUALITY_PRESETS[ p.qualityPreset ] ) {
+
+			this.applyQualityPreset( p.qualityPreset, false );
+
+		} else {
+
+			this.qualityPreset = 'custom';
+
+		}
+
+		if ( ! scaleOverride ) this.setRenderScale( p.renderScale );
+		const aa = Number( p.aa );
+		this.post.aaMode = aa > 0 ? 'taa' : 'none';
+		if ( aa > 0 ) this.post.taau.jitterPhaseOverride = aa;
+		this.shadows.enabled = !! p.shadows;
+		if ( this.waterMaterial ) this.waterMaterial.params.ssr.value = p.ssr ? 1 : 0;
+
+		if ( this.audio ) {
+
+			this.audio.setMasterVolume( p.audioVolume );
+			this.audio.setMuted( p.audioMuted );
+
+		}
+
+		if ( this.player ) this.player.camMode = p.camMode;
+		this.camera.fov = p.fov;
+		this.camera.updateProjectionMatrix();
+
+		const vehs = this.vehicleManager ? this.vehicleManager.vehicles : ( this.motorcycle ? [ this.motorcycle ] : [] );
+		for ( const vh of vehs ) {
+
+			vh.handlingPreset = p.vehPreset;
+			vh.topSpeedKmh = vh.id === 'buggy' ? Math.round( p.vehTopSpeed * ( 76 / 84 ) ) : p.vehTopSpeed;
+
+			vh.showRider = p.vehRider;
+			if ( p.vehHeadlight ) vh.toggleHeadlight( true );
+			else vh.setHeadlightAuto();
+			const rawPose = vh.id === 'buggy' ? p.buggyPose : p.motorcyclePose;
+			const safePose = sanitizeVehiclePose( rawPose, this.terrainData );
+			if ( safePose ) {
+
+				vh._placeOnGround( safePose.x, safePose.z, safePose.yaw );
+				vh._syncModel();
+
+			}
+
+		}
+
+		if ( this.weather ) {
+
+			if ( ! p.weatherAuto && p.weatherPreset ) this.weather.setPreset( p.weatherPreset, { instant: true } );
+			this.weather.setAuto( p.weatherAuto );
+			this.weather.speed = p.weatherSpeed;
+
+		}
+
+	}
+
+	saveRuntimeState( immediate = false ) {
+
+		if ( ! this.prefs ) return;
+		const patch = {};
+		if ( this.motorcycle && ! this.motorcycle.waterStalled ) {
+
+			const pose = sanitizeVehiclePose( { x: this.motorcycle.position.x, z: this.motorcycle.position.z, yaw: this.motorcycle.yaw }, this.terrainData );
+			if ( pose ) patch.motorcyclePose = pose;
+
+		}
+
+		if ( this.buggy && ! this.buggy.waterStalled ) {
+
+			const pose = sanitizeVehiclePose( { x: this.buggy.position.x, z: this.buggy.position.z, yaw: this.buggy.yaw }, this.terrainData );
+			if ( pose ) patch.buggyPose = pose;
+
+		}
+
+		if ( Object.keys( patch ).length ) this.prefs.save( patch, immediate );
+		else if ( immediate ) this.prefs.flush();
+
+	}
+
+	onPhotoModeChange( on ) {
+
+		if ( on ) {
+
+			this._savedFovBeforePhoto = this.camera.fov - ( this.player?.vehFovDelta || 0 );
+			if ( this.ui ) this.ui.ui.setPhotoFov( this.camera.fov );
+
+		} else if ( this._savedFovBeforePhoto != null ) {
+
+			this.camera.fov = this._savedFovBeforePhoto + ( this.player?.vehFovDelta || 0 );
+			this.camera.updateProjectionMatrix();
+			if ( this.ui ) this.ui.s.fov = this._savedFovBeforePhoto;
+			this._savedFovBeforePhoto = null;
+
+		}
+
+	}
+
+	adjustPhotoFov( deltaOrReset ) {
+
+		const next = deltaOrReset === 0
+			? ( this._savedFovBeforePhoto ?? 62 )
+			: MathUtils.clamp( this.camera.fov + Number( deltaOrReset ), 22, 95 );
+		this.camera.fov = next;
+		this.camera.updateProjectionMatrix();
+		if ( this.ui ) this.ui.ui.setPhotoFov( next );
+
+	}
+
+	requestPhotoCapture() {
+
+		if ( this._photoShotBusy ) return;
+		this._photoShotRequested = true;
+
+	}
+
+	async _finishPhotoCapture( buf, width, height, paddedBytesPerRow, format ) {
+
+		try {
+
+			await buf.mapAsync( GPUMapMode.READ );
+			const mapped = new Uint8Array( buf.getMappedRange() );
+			const rgba = new Uint8ClampedArray( width * height * 4 );
+			const isBgra = String( format ).startsWith( 'bgra' );
+			for ( let y = 0; y < height; y ++ ) {
+
+				const srcOff = y * paddedBytesPerRow;
+				const dstOff = y * width * 4;
+				for ( let x = 0; x < width; x ++ ) {
+
+					const si = srcOff + x * 4;
+					const di = dstOff + x * 4;
+					if ( isBgra ) {
+
+						rgba[ di ] = mapped[ si + 2 ];
+						rgba[ di + 1 ] = mapped[ si + 1 ];
+						rgba[ di + 2 ] = mapped[ si ];
+
+					} else {
+
+						rgba[ di ] = mapped[ si ];
+						rgba[ di + 1 ] = mapped[ si + 1 ];
+						rgba[ di + 2 ] = mapped[ si + 2 ];
+
+					}
+
+					rgba[ di + 3 ] = 255;
+
+				}
+
+			}
+
+			buf.unmap();
+			buf.destroy();
+
+			const canvas = document.createElement( 'canvas' );
+			canvas.width = width;
+			canvas.height = height;
+			const ctx = canvas.getContext( '2d' );
+			ctx.putImageData( new ImageData( rgba, width, height ), 0, 0 );
+			const blob = await new Promise( ( r ) => canvas.toBlob( r, 'image/png' ) );
+			if ( blob ) {
+
+				const d = new Date();
+				const pad = ( n ) => String( n ).padStart( 2, '0' );
+				const fname = `tidewater-${ d.getFullYear() }${ pad( d.getMonth() + 1 ) }${ pad( d.getDate() ) }-${ pad( d.getHours() ) }${ pad( d.getMinutes() ) }${ pad( d.getSeconds() ) }.png`;
+				const url = URL.createObjectURL( blob );
+				const a = document.createElement( 'a' );
+				a.href = url;
+				a.download = fname;
+				document.body.append( a );
+				a.click();
+				a.remove();
+				setTimeout( () => URL.revokeObjectURL( url ), 1000 );
+				if ( this.ui ) {
+
+					this.ui.ui.flashShutter();
+					this.ui.ui.toast( tr( 'Screenshot saved' ), 2200 );
+
+				}
+
+			}
+
+		} catch ( e ) {
+
+			console.error( 'Photo capture failed', e );
+			if ( this.ui ) this.ui.ui.toast( tr( 'Screenshot failed' ), 2400 );
+			try { buf.unmap(); } catch {}
+			try { buf.destroy(); } catch {}
+
+		} finally {
+
+			this._photoShotBusy = false;
+
+		}
 
 	}
 
@@ -733,11 +1252,21 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 			windSpeed: G.windSpeed.value,
 			windDir: G.windDir.value,
 			daylight: 1 - G.night.value,
+			timeOfDay: this.settings.timeOfDay,
+			rainIntensity: this.weather ? this.weather.state.rainIntensity : 0,
+			stormIntensity: this.weather ? this.weather.state.stormIntensity : 0,
+			sheltered: this.player.mode === 'boat' && this.player.camMode === 'first',
 			nearPier: Math.abs( p.x - WORLD.pier.x ) < 12 && p.z > WORLD.pier.zStart - 5 && p.z < WORLD.pier.zEnd + 8,
 			boat: {
 				active: this.boatCtl.driven, rpm: this.boatCtl.rpm, throttle: this.boatCtl.throttle, speed: this.boatCtl.velocity.length(),
 				position: this.boat.group.position, listenerInside: this.player.mode === 'boat' && this.player.camMode === 'first',
 			},
+			vehicle: ( () => {
+
+				const vh = this.player.activeVehicle || ( this.vehicleManager && this.vehicleManager.getActiveOrNearest( this.player.position ) ) || this.motorcycle;
+				return vh ? vh.getAudioState( this.player.mode === 'vehicle' && this.player.camMode === 'first' ) : undefined;
+
+			} )(),
 		} );
 
 	}

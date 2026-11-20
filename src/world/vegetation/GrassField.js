@@ -399,9 +399,10 @@ function buildPatch( level, clumps, seed = 7 ) {
 
 export class GrassField {
 
-	constructor( { terrain, mask } ) {
+	constructor( { terrain, mask, groundInteraction = null } ) {
 
 		this.terrain = terrain;
+		this.groundInteraction = groundInteraction;
 		const res = terrain.res;
 		const maskData = mask.data, mres = mask.res;
 
@@ -525,7 +526,7 @@ export class GrassField {
 
 	_createMaterial() {
 
-		return createGrassMaterial( this );
+		return createGrassMaterial( this, this.groundInteraction );
 
 	}
 
@@ -693,17 +694,22 @@ fn vegGrassTierFade( tier: f32, d: f32, cut: f32 ) -> f32 {
 `,
 } );
 
-function createGrassMaterial( field ) {
+function createGrassMaterial( field, groundInteraction = null ) {
 
 	const t = field.terrain;
 	const res = t.res;
+	const modules = [ vegModule, grassModule ];
+	if ( groundInteraction ) modules.push( groundInteraction.module );
 
 	const mat = new Material( {
 		name: 'veg-grass',
 		side: 'double',
 		roughness: 0.8,
 		metalness: 0,
-		modules: [ vegModule, grassModule ],
+		defines: {
+			HAS_GROUND_INTERACTION: groundInteraction ? 1 : 0,
+		},
+		modules,
 		textures: {
 			grassHeights: field.heightTex,
 			grassMask: field.maskTex,
@@ -804,7 +810,21 @@ function createGrassMaterial( field ) {
 	let hf2 = hf * hf;
 	let disp = ( vegWindDir3() * ( bendAmt * hf2 * stiff ) + vegWindPerp3() * ( flut * hf2 * stiff ) ) * ( length( o0 ) + 1e-4 );
 	let oL = length( o0 );
-	let ob = normalize( o0 + disp + vec3f( 0.0, 1e-5, 0.0 ) ) * oL;
+	var ob = normalize( o0 + disp + vec3f( 0.0, 1e-5, 0.0 ) ) * oL;
+#if HAS_GROUND_INTERACTION
+	let gi = groundInteractionAt( xz );
+	let tramp = gi.x * stiff;
+	if ( tramp > 0.003 ) {
+		let pdir = gi.zw * 2.0 - 1.0;
+		let plen = length( pdir );
+		let fallbackDir = vec2f( cos( yaw ), sin( yaw ) );
+		let pushXZ = select( fallbackDir, pdir / max( plen, 1e-4 ), plen > 0.08 );
+		let flatK = smoothstep( 0.0, 0.92, tramp );
+		let targetVec = vec3f( pushXZ.x * oL * 0.96, max( oL * 0.05, ob.y * 0.10 ), pushXZ.y * oL * 0.96 );
+		let bendMix = flatK * mix( 0.28, 0.94, hf );
+		ob = normalize( mix( ob, targetVec, bendMix ) + vec3f( 0.0, 1e-5, 0.0 ) ) * oL;
+	}
+#endif
 
 	let wScale = select( 1.0, mix( 1.5, 1.55, duneF ), isGrass );
 	let wide = wScale * widthK * min( scale * 2.0, max( scale, 0.5 ) );

@@ -54,10 +54,12 @@ const PATHS = {
 	anchor: '<circle cx="12" cy="5" r="2"/><path d="M12 7v14M5 12H3a9 9 0 0 0 18 0h-2M8 10h8"/>',
 	fog: '<path d="M4 8h13M3 12h18M6 16h14M9 20h7"/>',
 
-	// sea states (preset chips)
+	// sea states (preset chips) & weather
 	calm: '<path d="M8 13.5a4 4 0 0 1 8 0"/><path d="M3 16.5h18"/><path d="M7 20h10"/>',
 	breezy: '<path d="M4 9.5h9a2 2 0 1 0-2-2"/>' + WAVE_ROW( 17, 2 ),
 	choppy: '<path d="m2 10 2.5-3 2.5 3 2.5-3 2.5 3 2.5-3 2.5 3 2.5-3 2.5 3"/><path d="m2 16.5 2.5-3 2.5 3 2.5-3 2.5 3 2.5-3 2.5 3 2.5-3 2.5 3"/>',
+	'partly-cloudy': '<circle cx="9" cy="8.5" r="3"/><path d="M9 3v1.2M4.5 8.5H3.3M5.8 5.3l-.9-.9M12.2 5.3l.9-.9"/><path d="M8.5 19a3.5 3.5 0 1 1 .6-6.9A4.6 4.6 0 0 1 18 13.5a2.8 2.8 0 0 1-.4 5.5z"/>',
+	rain: '<path d="M6.5 15.5a4 4 0 1 1 .8-7.9A5.4 5.4 0 0 1 18 9.2a3.2 3.2 0 0 1 .2 6.3z"/><path d="M8.5 18l-1 2.5M12.5 18l-1 2.5M16.5 18l-1 2.5"/>',
 	storm: '<path d="M7 16.5a4.2 4.2 0 1 1 .8-8.3A5.8 5.8 0 0 1 18.8 10a3.3 3.3 0 0 1 .2 6.5"/><path d="m13 12.5-2.5 4h3l-2.5 4"/>',
 
 	// traversal modes
@@ -65,6 +67,8 @@ const PATHS = {
 	swim: '<circle cx="16.5" cy="6.5" r="1.8"/><path d="M4.5 12.5 9 9l3.2 2.3L15 9.8"/>' + WAVE_ROW( 17, 1.5 ),
 	dive: '<path d="M12 3v9"/><path d="m8.5 8.5 3.5 3.5 3.5-3.5"/>' + WAVE_ROW( 17, 1.5 ) + '<path d="M6 21h12"/>',
 	boat: '<path d="M2.5 14.5h19l-2.6 4.5H5.4z"/><path d="M6.5 14.5v-3H14l2.5 3"/><path d="M9 11.5V9"/>',
+	bike: '<circle cx="6.2" cy="17" r="3.4"/><circle cx="17.8" cy="17" r="3.4"/><path d="M6.2 17 10 11.5h4.5l3.3 5.5M14.5 11.5 13 8.5h-2.5M16.2 11l1.8-1"/>',
+	headlight: '<path d="M5 8.5c4.5-1 7.5 1 7.5 3.5S9.5 16.5 5 15.5z"/><path d="M15.5 9.5h4M15.5 12h4.5M15.5 14.5h4"/>',
 	move: '<path d="M12 3v18M3 12h18"/><path d="m9.5 5.5 2.5-2.5 2.5 2.5M9.5 18.5l2.5 2.5 2.5-2.5M5.5 9.5 3 12l2.5 2.5M18.5 9.5 21 12l-2.5 2.5"/>',
 
 	dot: '<circle cx="12" cy="12" r="3.5"/>',
@@ -85,8 +89,9 @@ const ALIASES = {
 	terrain: 'mountain', gpu: 'cpu', display: 'monitor', screen: 'monitor', render: 'monitor',
 	question: 'help', x: 'close', cam: 'camera', color: 'palette', colors: 'palette', grade: 'palette',
 	walking: 'walk', swimming: 'swim', diving: 'dive', underwater: 'dive',
+	motorcycle: 'bike', vehicle: 'bike', vehicles: 'bike', motorbike: 'bike',
 	free: 'move', 'free-camera': 'move', fly: 'move', drone: 'move',
-	bubbles: 'foam', spray: 'foam', clouds: 'cloud', weather: 'cloud', rain: 'storm',
+	bubbles: 'foam', spray: 'foam', clouds: 'cloud', weather: 'cloud',
 	night: 'moon', dusk: 'sunset', dawn: 'sunset', sunrise: 'sunset',
 	heading: 'compass', navigation: 'compass', harbor: 'anchor', dock: 'anchor', pier: 'anchor',
 	haze: 'fog', mist: 'fog', shadows: 'shadow', lightning: 'bolt', energy: 'bolt',
