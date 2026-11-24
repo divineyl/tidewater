@@ -93,6 +93,7 @@ export class Player {
 		this.camInit = false;
 		this._boatLookHoldT = 0;
 		this.wasUnder = false;
+		this.oxygen = 1.0;
 
 		// on deck: position and heading in the boat frame (+Z forward, yaw 0 looks forward)
 		this.deckPos = new THREE.Vector3();
@@ -240,8 +241,16 @@ export class Player {
 		}
 
 		const prevMode = this.mode;
-		if ( this.mode === 'walk' ) this.updateWalk( dt );
-		else this.updateSwim( dt );
+		if ( this.mode === 'walk' ) {
+
+			this.oxygen = Math.min( 1.0, this.oxygen + dt * 0.45 );
+			this.updateWalk( dt );
+
+		} else {
+
+			this.updateSwim( dt );
+
+		}
 
 		// camera. Wading out of your depth, finding your feet again or climbing out on a ladder
 		// changes the eye height: ease the view there (critically damped) instead of jumping
@@ -441,6 +450,22 @@ export class Player {
 		}
 
 		const under = this.camera.position.y < surfaceY - 0.05;
+		if ( under ) {
+
+			this.oxygen = Math.max( 0, this.oxygen - dt / 45 );
+			if ( this.oxygen <= 0 ) {
+
+				p.y = Math.min( surfaceY - 0.08, p.y + dt * 1.45 );
+				this.velocity.y = Math.max( this.velocity.y, 0.85 );
+
+			}
+
+		} else {
+
+			this.oxygen = Math.min( 1.0, this.oxygen + dt * 0.45 );
+
+		}
+
 		if ( under !== this.wasUnder && this.audio ) {
 
 			if ( under ) this.audio.submerge();

@@ -34,6 +34,11 @@ export const DEFAULT_PREFS = Object.freeze( {
 	cloudQuality: 'high',
 	caustics: true,
 	autoFps: false,
+	fpsCap: 0,
+	activeTitle: '',
+	customTurnUrl: '',
+	customTurnUser: '',
+	customTurnCred: '',
 	mpName: '',
 	motorcyclePose: null,
 	buggyPose: null,
@@ -83,6 +88,15 @@ export function normalizePrefs( raw ) {
 	const motorcyclePose = normPose( src.motorcyclePose );
 	const buggyPose = normPose( src.buggyPose );
 
+	const fpsCapOpts = [ 0, 30, 60 ];
+	const fpsCap = fpsCapOpts.includes( Number( src.fpsCap ) ) ? Number( src.fpsCap ) : DEFAULT_PREFS.fpsCap;
+	const cleanText = ( val, max ) => typeof val === 'string' ? val.replace( /[\x00-\x1f\x7f]/g, '' ).trim().slice( 0, max ) : '';
+	const activeTitle = cleanText( src.activeTitle, 32 );
+	const rawTurn = cleanText( src.customTurnUrl, 120 );
+	const customTurnUrl = /^turns?:[^\s]+$/i.test( rawTurn ) ? rawTurn : '';
+	const customTurnUser = cleanText( src.customTurnUser, 64 );
+	const customTurnCred = cleanText( src.customTurnCred, 64 );
+
 	return {
 		qualityPreset: preset,
 		renderScale: clamp( finite( Number( src.renderScale ), DEFAULT_PREFS.renderScale ), 0.4, 1 ),
@@ -92,6 +106,11 @@ export function normalizePrefs( raw ) {
 		cloudQuality,
 		caustics: typeof src.caustics === 'boolean' ? src.caustics : DEFAULT_PREFS.caustics,
 		autoFps: typeof src.autoFps === 'boolean' ? src.autoFps : DEFAULT_PREFS.autoFps,
+		fpsCap,
+		activeTitle,
+		customTurnUrl,
+		customTurnUser,
+		customTurnCred,
 		audioVolume: clamp( finite( Number( src.audioVolume ), DEFAULT_PREFS.audioVolume ), 0, 1 ),
 		audioMuted: typeof src.audioMuted === 'boolean' ? src.audioMuted : DEFAULT_PREFS.audioMuted,
 		volAmbient: clamp( finite( Number( src.volAmbient ), DEFAULT_PREFS.volAmbient ), 0, 1 ),

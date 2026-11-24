@@ -303,6 +303,61 @@ ipcMain.handle( 'desktop:createShortcut', async () => {
 
 } );
 
+function compareVer( a, b ) {
+
+	const parse = ( v ) => {
+
+		const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec( String( v || '' ).trim() );
+		return m ? [ Number( m[ 1 ] ), Number( m[ 2 ] ), Number( m[ 3 ] ) ] : null;
+
+	};
+	const pa = parse( a );
+	const pb = parse( b );
+	if ( ! pa || ! pb ) return 0;
+	for ( let i = 0; i < 3; i ++ ) {
+
+		if ( pa[ i ] > pb[ i ] ) return 1;
+		if ( pa[ i ] < pb[ i ] ) return - 1;
+
+	}
+
+	return 0;
+
+}
+
+ipcMain.handle( 'desktop:checkUpdate', async () => {
+
+	const pkgVer = ( () => {
+
+		try { return require( './package.json' ).version || '1.4.0'; } catch { return '1.4.0'; }
+
+	} )();
+	try {
+
+		const resp = await fetch( 'https://api.github.com/repos/divineyl/tidewater/releases/latest', {
+			headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Tidewater-Desktop' },
+			signal: AbortSignal.timeout( 5000 ),
+		} );
+		if ( ! resp.ok ) return { ok: false, currentVersion: pkgVer };
+		const data = await resp.json();
+		const latestRaw = String( data?.tag_name || '' ).replace( /^v/i, '' ).trim();
+		const hasUpdate = compareVer( latestRaw, pkgVer ) > 0;
+		return {
+			ok: true,
+			currentVersion: pkgVer,
+			latestVersion: latestRaw,
+			hasUpdate,
+			releaseUrl: data?.html_url || 'https://github.com/divineyl/tidewater/releases',
+		};
+
+	} catch {
+
+		return { ok: false, currentVersion: pkgVer };
+
+	}
+
+} );
+
 app.whenReady().then( () => {
 
 	Menu.setApplicationMenu( null );

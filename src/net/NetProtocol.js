@@ -10,7 +10,18 @@ export const PLAYER_COLORS = [
 ];
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const ALLOWED_TYPES = new Set( [ 'hello', 'welcome', 'peer_join', 'peer_leave', 'state', 'world', 'chat', 'catch', 'ping_wp', 'emote', 'tourney_start', 'tourney_score', 'tourney_end' ] );
+const ALLOWED_TYPES = new Set( [
+	'hello', 'welcome', 'peer_join', 'peer_leave', 'state', 'world', 'chat', 'catch',
+	'ping_wp', 'emote', 'tourney_start', 'tourney_score', 'tourney_end',
+	'ping', 'pong', 'quick_chat', 'rally_start', 'rally_progress', 'rally_finish',
+] );
+
+export const QUICK_PHRASES = Object.freeze( {
+	biting: { shortEn: '🎣 Biting!', shortZh: '🎣 狂咬口', fullEn: 'Fish are biting right here!', fullZh: '这里鱼群正在狂咬口，快来！' },
+	board: { shortEn: '🚤 Hop on', shortZh: '🚤 快上船', fullEn: 'Pulling up — press X to hop aboard!', fullZh: '我靠过来了，按 X 键上我的船/车！' },
+	rally: { shortEn: '🏁 Race?', shortZh: '🏁 来飙车', fullEn: 'Anyone up for an East Headland rally race?', fullZh: '走！东岬山路越野赛走起！' },
+	nice: { shortEn: '👍 Nice!', shortZh: '👍 牛啊', fullEn: 'Nice catch, captain!', fullZh: '太牛了船长！大丰收！' },
+} );
 const ALLOWED_MODES = new Set( [ 'walk', 'swim', 'dive', 'deck', 'boat', 'vehicle', 'coop', 'free' ] );
 const ALLOWED_PAINTS = new Set( [ 'stock', 'coral', 'teal', 'sand', 'obsidian', 'pearl' ] );
 const ALLOWED_TINTS = new Set( [ 'warm', 'led', 'amber' ] );
@@ -124,6 +135,7 @@ export function interpolatePeer( cur, target, dt ) {
 	out.castPhase = target.castPhase;
 	out.catchSpecies = target.catchSpecies;
 	out.ridingPeerId = target.ridingPeerId;
+	out.title = target.title;
 	if ( Number.isFinite( target.bobX ) && Number.isFinite( target.bobY ) && Number.isFinite( target.bobZ ) ) {
 
 		out.bobX = Number.isFinite( cur.bobX ) ? cur.bobX + ( target.bobX - cur.bobX ) * alpha : target.bobX;
@@ -176,6 +188,7 @@ export function sanitizeMessage( raw ) {
 				id: cleanStr( obj.id || from, '', 36 ),
 				name: sanitizeName( obj.name ),
 				color: /^#[0-9a-fA-F]{6}$/.test( obj.color || '' ) ? obj.color : PLAYER_COLORS[ 0 ],
+				title: cleanStr( obj.title, '', 32 ),
 			};
 
 		case 'welcome':
@@ -188,6 +201,7 @@ export function sanitizeMessage( raw ) {
 						id: cleanStr( p?.id, '', 36 ),
 						name: sanitizeName( p?.name ),
 						color: /^#[0-9a-fA-F]{6}$/.test( p?.color || '' ) ? p.color : PLAYER_COLORS[ 0 ],
+						title: cleanStr( p?.title, '', 32 ),
 					} ) ).filter( ( p ) => p.id )
 					: [],
 				world: obj.world && typeof obj.world === 'object' ? sanitizeWorldPayload( obj.world ) : null,
@@ -200,6 +214,7 @@ export function sanitizeMessage( raw ) {
 				id: cleanStr( obj.id || from, '', 36 ),
 				name: sanitizeName( obj.name ),
 				color: /^#[0-9a-fA-F]{6}$/.test( obj.color || '' ) ? obj.color : PLAYER_COLORS[ 0 ],
+				title: cleanStr( obj.title, '', 32 ),
 			};
 
 		case 'peer_leave':
@@ -231,6 +246,7 @@ export function sanitizeMessage( raw ) {
 				bobZ: Number.isFinite( obj.bobZ ) ? num( obj.bobZ, 0, - 2000, 2000 ) : null,
 				catchSpecies: cleanStr( obj.catchSpecies, '', 32 ),
 				ridingPeerId: cleanStr( obj.ridingPeerId, '', 36 ),
+				title: cleanStr( obj.title, '', 32 ),
 			};
 
 		case 'world':
@@ -303,6 +319,53 @@ export function sanitizeMessage( raw ) {
 				...base,
 				tourneyId: cleanStr( obj.tourneyId, '', 36 ),
 				winnerName: cleanStr( obj.winnerName, '', 16 ),
+			};
+
+		case 'ping':
+		case 'pong':
+			return {
+				...base,
+				seq: num( obj.seq, 0, 0, 1e9 ) | 0,
+				ts: num( obj.ts, 0, 0, 1e14 ),
+			};
+
+		case 'quick_chat': {
+
+			const phraseId = Object.prototype.hasOwnProperty.call( QUICK_PHRASES, obj.phraseId ) ? obj.phraseId : 'biting';
+			return {
+				...base,
+				name: sanitizeName( obj.name ),
+				color: /^#[0-9a-fA-F]{6}$/.test( obj.color || '' ) ? obj.color : PLAYER_COLORS[ 0 ],
+				phraseId,
+			};
+
+		}
+
+		case 'rally_start':
+			return {
+				...base,
+				id: cleanStr( obj.id, 'r1', 36 ),
+				countdownSec: num( obj.countdownSec, 3, 1, 10 ),
+			};
+
+		case 'rally_progress':
+			return {
+				...base,
+				raceId: cleanStr( obj.raceId, '', 36 ),
+				name: sanitizeName( obj.name ),
+				color: /^#[0-9a-fA-F]{6}$/.test( obj.color || '' ) ? obj.color : PLAYER_COLORS[ 0 ],
+				gateIndex: Math.max( 0, Math.min( 20, num( obj.gateIndex, 0, 0, 20 ) | 0 ) ),
+				elapsedSec: num( obj.elapsedSec, 0, 0, 3600 ),
+			};
+
+		case 'rally_finish':
+			return {
+				...base,
+				raceId: cleanStr( obj.raceId, '', 36 ),
+				name: sanitizeName( obj.name ),
+				color: /^#[0-9a-fA-F]{6}$/.test( obj.color || '' ) ? obj.color : PLAYER_COLORS[ 0 ],
+				elapsedSec: num( obj.elapsedSec, 999, 0.1, 3600 ),
+				vehicleId: obj.vehicleId === 'buggy' ? 'buggy' : 'motorcycle',
 			};
 
 		default:

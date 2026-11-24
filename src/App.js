@@ -726,6 +726,27 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 	start() {
 
 		this.engine.start( ( dt, t ) => this.frame( dt, t ) );
+		if ( ! this.benchMode && typeof window !== 'undefined' && window.tidewaterDesktop?.checkForUpdate ) {
+
+			setTimeout( () => {
+
+				window.tidewaterDesktop.checkForUpdate().then( ( res ) => {
+
+					if ( res?.ok && res.hasUpdate && this.ui?.ui ) {
+
+						const zh = getLang() === 'zh';
+						this.ui.ui.toast(
+							zh ? `发现新版本 v${ res.latestVersion }（当前 v${ res.currentVersion }），可前往 GitHub Releases 更新` : `Update available: v${ res.latestVersion }`,
+							5500
+						);
+
+					}
+
+				} ).catch( () => {} );
+
+			}, 6000 );
+
+		}
 
 	}
 
@@ -1073,6 +1094,21 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 	}
 
+	setFpsCap( cap ) {
+
+		this.engine?.setFpsCap?.( cap );
+
+	}
+
+	setActiveTitle( titleId ) {
+
+		const clean = typeof titleId === 'string' ? titleId.trim().slice( 0, 32 ) : '';
+		if ( this.prefs ) this.prefs.save( { activeTitle: clean } );
+		if ( this.mp ) this.mp._emitState?.();
+		return clean;
+
+	}
+
 	setCloudQuality( mode ) {
 
 		const m = ( mode === 'off' || mode === 'low' || mode === 'medium' || mode === 'high' ) ? mode : 'high';
@@ -1164,8 +1200,14 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		if ( this.vegetation ) this.vegetation.setFastMode?.( this.qualityPreset === 'potato' || this.qualityPreset === 'eco' || this.qualityPreset === 'balanced' );
 		this.autoFps = !! p.autoFps;
+		this.setFpsCap( p.fpsCap );
 		if ( this.ui ) this.ui.ui.setQualityPreset( this.qualityPreset );
-		if ( this.boat ) this.boat.setPaint?.( p.boatPaint );
+		if ( this.boat ) {
+
+			this.boat.setPaint?.( p.boatPaint );
+			this.boat.setBoatName?.( p.boatName );
+
+		}
 		if ( this.audio ) this.audio.setRadioEnabled?.( !! p.islandRadio );
 
 		if ( this.audio ) {

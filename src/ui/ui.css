@@ -2943,6 +2943,56 @@ body {
 	color: var(--tw-ink-2);
 }
 
+.tw-np-title {
+	padding: 1px calc(5 * var(--tw-u));
+	border-radius: 999px;
+	background: rgba(var(--tw-aqua-rgb), 0.2);
+	border: 1px solid rgba(var(--tw-aqua-rgb), 0.45);
+	color: var(--tw-aqua);
+	font-size: calc(9 * var(--tw-u));
+	font-weight: 700;
+}
+
+.tw-np-bubble {
+	position: absolute;
+	bottom: calc(100% + 5 * var(--tw-u));
+	left: 50%;
+	transform: translateX(-50%);
+	padding: calc(3 * var(--tw-u)) calc(8 * var(--tw-u));
+	border-radius: calc(8 * var(--tw-u));
+	background: rgba(12, 22, 34, 0.92);
+	border: 1px solid rgba(var(--tw-aqua-rgb), 0.5);
+	color: #eef8ff;
+	font-size: calc(10 * var(--tw-u));
+	font-weight: 500;
+	white-space: nowrap;
+}
+
+.tw-chat-phrases {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: calc(4 * var(--tw-u));
+}
+
+.tw-phrase-btn {
+	height: calc(20 * var(--tw-u));
+	padding: 0 calc(4 * var(--tw-u));
+	border-radius: calc(4 * var(--tw-u));
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	background: rgba(255, 255, 255, 0.05);
+	color: var(--tw-ink-2);
+	font: 600 calc(9.5 * var(--tw-u)) var(--tw-font);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: pointer;
+}
+
+.tw-phrase-btn:hover {
+	background: rgba(var(--tw-aqua-rgb), 0.2);
+	color: var(--tw-aqua);
+}
+
 .tw-chat {
 	position: absolute;
 	left: var(--tw-edge);

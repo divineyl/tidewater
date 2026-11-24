@@ -3,6 +3,9 @@ import { UPGRADES, BOAT_PAINTS, BOAT_PAINT_IDS, nextLevel, FUEL_PRICE } from './
 import { FishPortrait } from './FishPortrait.js';
 import { LANDMARKS } from './Landmarks.js';
 import { RALLY_GATES, RALLY_MEDALS } from './RallyCourse.js';
+import { MAX_CRAB_TRAPS, TRAP_SOAK_SEC } from './CrabTraps.js';
+import { DIVE_TREASURES } from './DiveTreasures.js';
+import { evaluateAchievements } from './Achievements.js';
 import { getLang, onLangChange, tr, trFish, trUpgradeName, trUpgradeLabel } from '../i18n/i18n.js';
 
 // DOM for the fishing game, in the look of the rest of the HUD (ui/ui.css tokens, .tw-glass):
@@ -95,10 +98,18 @@ const CSS = /* css */`
 .gm-rally { position: absolute; left: 50%; top: var(--tw-edge); transform: translateX(-50%); display: none; align-items: center; gap: var(--tw-3);
 	padding: var(--tw-2) var(--tw-4); border-radius: 999px; font: 600 var(--tw-fs-md) var(--tw-mono); color: var(--tw-sun); pointer-events: none; z-index: 20; }
 .gm-rally.is-on { display: inline-flex; }
+.gm-o2 { position: absolute; left: 50%; bottom: calc(max(calc(72 * var(--tw-u)), 13vh) + calc(18 * var(--tw-u))); transform: translateX(-50%);
+	display: none; align-items: center; gap: var(--tw-2); padding: var(--tw-1) var(--tw-3); border-radius: 999px; font: 600 var(--tw-fs-xs) var(--tw-mono);
+	color: var(--tw-aqua); pointer-events: none; z-index: 20; }
+.gm-o2.is-on { display: inline-flex; }
+.gm-o2-bar { width: calc(88 * var(--tw-u)); height: calc(6 * var(--tw-u)); border-radius: 99px; background: var(--tw-fill-2); overflow: hidden; }
+.gm-o2-bar > span { display: block; height: 100%; width: 100%; background: var(--tw-aqua); transition: width 120ms linear; }
+.gm-o2.is-low { color: var(--tw-coral); }
+.gm-o2.is-low .gm-o2-bar > span { background: var(--tw-coral); }
 
 /* Island Journal (J) */
-.gm-journal { width: min(92vw, calc(520 * var(--tw-u))); max-height: 76vh; z-index: 44; }
-.gm-j-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: var(--tw-3); }
+.gm-journal { width: min(92vw, calc(560 * var(--tw-u))); max-height: 76vh; z-index: 44; }
+.gm-j-tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: var(--tw-3); }
 .gm-j-tab { font: 600 var(--tw-fs-xs) var(--tw-font); color: var(--tw-ink-2); background: var(--tw-fill); border: 1px solid var(--tw-line);
 	border-radius: 8px; padding: 6px 4px; cursor: pointer; transition: background var(--tw-fast), color var(--tw-fast), border-color var(--tw-fast); }
 .gm-j-tab.is-active { background: rgba(var(--tw-aqua-rgb), 0.18); color: var(--tw-aqua); border-color: rgba(var(--tw-aqua-rgb), 0.5); }
@@ -239,11 +250,15 @@ export class GameHUD {
 		this.lureEl = h( 'div', 'gm-lure tw-glass', '<kbd>B</kbd><span class="gm-lure-txt"></span>' );
 		this.lureTxt = this.lureEl.querySelector( '.gm-lure-txt' );
 		this.rallyEl = h( 'div', 'gm-rally tw-glass', '' );
+		this.o2El = h( 'div', 'gm-o2 tw-glass', '<span class="gm-o2-lab">O₂</span><span class="gm-o2-bar"><span></span></span><span class="gm-o2-pct">100%</span>' );
+		this.o2Lab = this.o2El.querySelector( '.gm-o2-lab' );
+		this.o2Bar = this.o2El.querySelector( '.gm-o2-bar > span' );
+		this.o2Pct = this.o2El.querySelector( '.gm-o2-pct' );
 		this.catchScrim = h( 'div', 'gm-catch-scrim' );
 		this.catchCard = h( 'div', 'gm-catch tw-glass' );
 		this.catchOpen = false;
 		const hud = ui.hud || ui.root;
-		hud.append( this.catchScrim, this.purse, this.lureEl, this.rallyEl, this.fight, this.bite, this.cast, this.dot, this.catchCard );
+		hud.append( this.catchScrim, this.purse, this.lureEl, this.rallyEl, this.o2El, this.fight, this.bite, this.cast, this.dot, this.catchCard );
 
 		// panels (interactive)
 		this.inv = h( 'div', 'gm-panel tw-glass tw-interactive' );
@@ -296,7 +311,7 @@ export class GameHUD {
 	}
 
 	// per frame
-	update( { fight, casting, power, bite, aiming, fuel = null, sonar = null, lure = null, rally = null } ) {
+	update( { fight, casting, power, bite, aiming, fuel = null, sonar = null, lure = null, rally = null, oxygen = null } ) {
 
 		// boat instruments in the purse: fuel while aboard, the fish finder when fitted
 		this.fuelEl.classList.toggle( 'is-on', !! fuel );
@@ -366,6 +381,22 @@ export class GameHUD {
 				this.rallyEl.textContent = zh
 					? `东岬计时赛 · 门 ${ rally.gate }/${ rally.total } · ${ rally.elapsed.toFixed( 1 ) }s`
 					: `Rally · Gate ${ rally.gate }/${ rally.total } · ${ rally.elapsed.toFixed( 1 ) }s`;
+
+			}
+
+		}
+
+		if ( this.o2El ) {
+
+			const showO2 = typeof oxygen === 'number';
+			this.o2El.classList.toggle( 'is-on', showO2 );
+			if ( showO2 ) {
+
+				const pct = Math.max( 0, Math.min( 100, Math.round( oxygen * 100 ) ) );
+				this.o2El.classList.toggle( 'is-low', pct <= 25 );
+				if ( this.o2Lab ) this.o2Lab.textContent = getLang() === 'zh' ? '氧气' : 'O₂';
+				if ( this.o2Bar ) this.o2Bar.style.width = `${ pct }%`;
+				if ( this.o2Pct ) this.o2Pct.textContent = `${ pct }%`;
 
 			}
 
@@ -502,10 +533,12 @@ export class GameHUD {
 		const zh = getLang() === 'zh';
 		const tabs = [
 			[ 'bounties', zh ? '悬赏订单' : 'Bounties' ],
-			[ 'lures', zh ? '拟饵与鱼王' : 'Lures & Legends' ],
-			[ 'landmarks', zh ? '明信片打卡' : 'Viewpoints' ],
-			[ 'rally', zh ? '越野计时赛' : 'Rally Trial' ],
+			[ 'lures', zh ? '拟饵鱼王' : 'Lures & Boss' ],
+			[ 'sea', zh ? '蟹笼潜宝' : 'Traps & Dive' ],
+			[ 'explore', zh ? '打卡越野' : 'Map & Rally' ],
+			[ 'titles', zh ? '成就称号' : 'Titles' ],
 		];
+		if ( ! tabs.some( ( [ id ] ) => id === this.journalTab ) ) this.journalTab = 'bounties';
 
 		let body = '';
 		if ( this.journalTab === 'bounties' ) {
@@ -573,9 +606,65 @@ export class GameHUD {
 
 			body = `${ lureCards }<div class="gm-shop-sec">${ zh ? '海岛传奇鱼王图鉴' : 'Legendary Boss Fish' }</div>${ legCards }`;
 
-		} else if ( this.journalTab === 'landmarks' ) {
+		} else if ( this.journalTab === 'sea' ) {
 
-			body = LANDMARKS.map( ( lm ) => {
+			const traps = this.game.crabTraps?.traps || [];
+			const trapRows = traps.length
+				? traps.map( ( t ) => {
+
+					const pct = Math.min( 100, Math.round( ( t.soakSec / TRAP_SOAK_SEC ) * 100 ) );
+					return `<div class="gm-j-card ${ t.ready ? 'is-done' : '' }">
+						<div class="gm-j-row">
+							<span class="gm-j-title">${ zh ? `捕蟹笼 #${ t.id }（水深 ${ t.depth.toFixed( 1 ) }m）` : `Trap #${ t.id } (${ t.depth.toFixed( 1 ) }m deep)` }</span>
+							<div style="display:flex;gap:6px;align-items:center">
+								<span class="gm-j-badge ${ t.ready ? 'is-done' : '' }">${ t.ready ? ( zh ? '可收笼 ★' : 'Ready ★' ) : `${ pct }%` }</span>
+								<button type="button" class="gm-mini" data-nav-xy="${ t.x.toFixed( 1 ) },${ t.z.toFixed( 1 ) }" data-nav-lbl="${ zh ? `捕蟹笼 #${ t.id }` : `Trap #${ t.id }` }">${ zh ? '导航' : 'Pin' }</button>
+							</div>
+						</div>
+						<div class="gm-j-prog"><span style="width:${ pct }%"></span></div>
+					</div>`;
+
+				} ).join( '' )
+				: `<div class="gm-j-card"><div class="gm-j-sub">${ zh ? '暂未下放捕蟹笼。驾船驶入水深 ≥2.2 米海域按 K 键即可下笼（最多 4 只，约 75 秒后浮标亮金收笼）。' : 'No traps active. Sail into water ≥2.2 m deep and press K to deploy up to 4 traps (ready in ~75s).' }</div></div>`;
+
+			const trDone = Object.keys( s.treasures || {} ).length;
+			const diveCards = DIVE_TREASURES.map( ( trItem ) => {
+
+				const got = !! s.treasures?.[ trItem.id ];
+				return `<div class="gm-j-card ${ got ? 'is-done' : '' }">
+					<div class="gm-j-row">
+						<span class="gm-j-title">${ zh ? trItem.nameZh : trItem.nameEn }</span>
+						<div style="display:flex;gap:6px;align-items:center">
+							<span class="gm-j-badge ${ got ? 'is-done' : '' }">${ got ? ( zh ? '已打捞 ✓' : 'Found ✓' ) : `+$${ trItem.reward }` }</span>
+							<button type="button" class="gm-mini" data-nav-xy="${ trItem.x },${ trItem.z }" data-nav-lbl="${ zh ? trItem.nameZh : trItem.nameEn }">${ zh ? '导航' : 'Pin' }</button>
+						</div>
+					</div>
+					<div class="gm-j-sub">${ zh ? trItem.hintZh : trItem.hintEn }</div>
+				</div>`;
+
+			} ).join( '' );
+			body = `
+				<div class="gm-shop-sec">${ zh ? `船尾捕蟹笼 (${ traps.length }/${ MAX_CRAB_TRAPS } · 累计收笼 ${ s.trapsHauled } 次)` : `Crab Traps (${ traps.length }/${ MAX_CRAB_TRAPS } · Hauled ${ s.trapsHauled })` }</div>
+				${ trapRows }
+				<div class="gm-shop-sec">${ zh ? `水下沉船秘宝 (${ trDone }/${ DIVE_TREASURES.length } · 游泳下潜接近自动打捞)` : `Dive Treasures (${ trDone }/${ DIVE_TREASURES.length } · Swim underwater to collect)` }</div>
+				${ diveCards }`;
+
+		} else if ( this.journalTab === 'explore' ) {
+
+			const mb = s.rallyBest?.motorcycle;
+			const bb = s.rallyBest?.buggy;
+			const rallyBlock = `
+				<div class="gm-shop-sec">${ zh ? '东岬盘山越野计时赛（10 门）' : 'East Headland Rally (10 Gates)' }</div>
+				<div class="gm-j-card">
+					<div class="gm-j-row"><span class="gm-j-title">${ zh ? '奖牌与个人最佳' : 'Medals & Best' }</span><span class="gm-j-badge">${ zh ? '摩托' : 'Bike' }: ${ mb ? mb.toFixed( 2 ) + 's' : '--' } · ${ zh ? '越野车' : 'Buggy' }: ${ bb ? bb.toFixed( 2 ) + 's' : '--' }</span></div>
+					<div class="gm-j-sub">${ zh ? `🥇 ≤${ RALLY_MEDALS.gold.sec }s ($${ RALLY_MEDALS.gold.reward }) · 🥈 ≤${ RALLY_MEDALS.silver.sec }s ($${ RALLY_MEDALS.silver.reward }) · 🥉 ≤${ RALLY_MEDALS.bronze.sec }s ($${ RALLY_MEDALS.bronze.reward })` : `Gold ≤${ RALLY_MEDALS.gold.sec }s ($${ RALLY_MEDALS.gold.reward }) · Silver ≤${ RALLY_MEDALS.silver.sec }s ($${ RALLY_MEDALS.silver.reward })` }</div>
+					<div class="gm-j-sub" style="display:flex;gap:8px;margin-top:8px">
+						<button type="button" class="gm-mini" data-nav-rally>${ zh ? '导航到起点门' : 'Navigate to Start' }</button>
+						<button type="button" class="gm-mini" data-start-rally>${ zh ? '立刻开跑 (U)' : 'Start Now (U)' }</button>
+					</div>
+				</div>`;
+
+			const lmCards = LANDMARKS.map( ( lm ) => {
 
 				const rec = s.landmarks?.[ lm.id ];
 				const visited = !! ( rec && ( rec === true || rec.visited ) );
@@ -593,33 +682,33 @@ export class GameHUD {
 				</div>`;
 
 			} ).join( '' );
+			body = `${ rallyBlock }<div class="gm-shop-sec">${ zh ? '海岛明信片打卡点（按 P 拍照可获额外奖励）' : 'Island Postcard Viewpoints' }</div>${ lmCards }`;
 
 		} else {
 
-			const mb = s.rallyBest?.motorcycle;
-			const bb = s.rallyBest?.buggy;
-			body = `
-				<div class="gm-j-card">
-					<div class="gm-j-title">${ zh ? '东岬盘山越野计时赛（共 10 个检查点）' : 'East Headland Off-Road Rally (10 Gates)' }</div>
-					<div class="gm-j-sub">${ zh ? '从船屋东侧山路出发一路攀升至灯塔观景台。驾驶摩托车或越野车穿过发光起点门自动开表，或直接点击下方导航起点。' : 'Drive from the boathouse east road up to the lighthouse. Pass gate 1 or press U in any land vehicle to start.' }</div>
-				</div>
-				<div class="gm-j-card">
-					<div class="gm-j-row"><span class="gm-j-title">${ zh ? '奖牌标准' : 'Medals' }</span><span class="gm-j-badge">🥇 ≤${ RALLY_MEDALS.gold.sec }s · 🥈 ≤${ RALLY_MEDALS.silver.sec }s · 🥉 ≤${ RALLY_MEDALS.bronze.sec }s</span></div>
-					<div class="gm-j-sub">${ zh ? `金牌奖励 $${ RALLY_MEDALS.gold.reward } · 银牌 $${ RALLY_MEDALS.silver.reward } · 铜牌 $${ RALLY_MEDALS.bronze.reward }` : `Gold +$${ RALLY_MEDALS.gold.reward } · Silver +$${ RALLY_MEDALS.silver.reward } · Bronze +$${ RALLY_MEDALS.bronze.reward }` }</div>
-				</div>
-				<div class="gm-j-card">
-					<div class="gm-j-row"><span class="gm-j-title">${ zh ? '个人最佳圈速' : 'Personal Best' }</span><span class="gm-j-badge">${ zh ? '摩托' : 'Bike' }: ${ mb ? mb.toFixed( 2 ) + 's' : '--' } · ${ zh ? '越野车' : 'Buggy' }: ${ bb ? bb.toFixed( 2 ) + 's' : '--' }</span></div>
-					<div class="gm-j-sub" style="display:flex;gap:8px;margin-top:8px">
-						<button type="button" class="gm-mini" data-nav-rally>${ zh ? '导航到起点门' : 'Navigate to Start' }</button>
-						<button type="button" class="gm-mini" data-start-rally>${ zh ? '立刻开跑 (U)' : 'Start Now (U)' }</button>
+			const ev = evaluateAchievements( s );
+			const curTitle = this.game.app?.prefs?.data?.activeTitle || '';
+			body = `<div class="gm-shop-sec">${ zh ? `海岛荣誉成就 (${ ev.doneCount }/${ ev.totalCount })` : `Achievements (${ ev.doneCount }/${ ev.totalCount })` }</div>` + ev.list.map( ( ach ) => {
+
+				const equipped = ach.done && curTitle === ach.titleId;
+				const actionBtn = ach.done
+					? `<button type="button" class="gm-mini" data-equip-title="${ ach.titleId }" style="${ equipped ? 'border-color:var(--tw-aqua);color:var(--tw-aqua)' : '' }">${ equipped ? ( zh ? '已佩戴 ✓' : 'Equipped ✓' ) : ( zh ? `佩戴「${ ach.titleZh }」` : `Equip "${ ach.titleEn }"` ) }</button>`
+					: `<span class="gm-j-badge">${ zh ? `称号：${ ach.titleZh }` : ach.titleEn }</span>`;
+				return `<div class="gm-j-card ${ ach.done ? 'is-done' : '' }">
+					<div class="gm-j-row">
+						<span class="gm-j-title">${ zh ? ach.nameZh : ach.nameEn }</span>
+						${ actionBtn }
 					</div>
+					<div class="gm-j-sub">${ zh ? ach.descZh : ach.descEn }</div>
 				</div>`;
+
+			} ).join( '' );
 
 		}
 
 		this.journal.innerHTML = `
 			<h2>${ zh ? '海岛手账与委托' : 'Island Journal' }</h2>
-			<p class="gm-sub">${ zh ? '悬赏订单 · 拟饵与传奇鱼王 · 风景明信片 · 东岬越野计时赛' : 'Daily bounties · Lures & Legends · Postcard spots · Rally' }</p>
+			<p class="gm-sub">${ zh ? '悬赏 · 拟饵鱼王 · 蟹笼潜宝 · 打卡越野 · 成就称号' : 'Bounties · Lures · Traps & Dive · Map & Rally · Titles' }</p>
 			<div class="gm-j-tabs">${ tabs.map( ( [ id, label ] ) => `<button type="button" class="gm-j-tab ${ this.journalTab === id ? 'is-active' : '' }" data-jtab="${ id }">${ label }</button>` ).join( '' ) }</div>
 			<div class="gm-list">${ body }</div>
 			<div class="gm-foot"><span class="gm-sub">${ zh ? '随时按 J 键打开或关闭' : 'Press J anytime' }</span><button class="gm-btn is-ghost" data-jclose>${ zh ? '关闭 (J)' : 'Close (J)' }</button></div>`;
@@ -646,6 +735,28 @@ export class GameHUD {
 				this.toggleJournal( false );
 
 			}
+
+		};
+
+		for ( const b of this.journal.querySelectorAll( '[data-nav-xy]' ) ) b.onclick = () => {
+
+			const [ xs, zs ] = ( b.dataset.navXy || '' ).split( ',' );
+			const x = Number( xs ), z = Number( zs );
+			if ( Number.isFinite( x ) && Number.isFinite( z ) && this.game.minimap ) {
+
+				this.game.minimap.setWaypoint( x, z, b.dataset.navLbl || ( zh ? '导航目标' : 'Target' ) );
+				this.toggleJournal( false );
+
+			}
+
+		};
+
+		for ( const b of this.journal.querySelectorAll( '[data-equip-title]' ) ) b.onclick = () => {
+
+			const id = b.dataset.equipTitle;
+			const nextId = this.game.app?.prefs?.data?.activeTitle === id ? '' : id;
+			this.game.app?.setActiveTitle?.( nextId );
+			this.renderJournal();
 
 		};
 

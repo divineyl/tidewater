@@ -2157,6 +2157,12 @@ export class UI {
 				<button type="button" class="tw-emote-btn" data-emote="boat_horn" title="Horn">📯</button>
 				<button type="button" class="tw-emote-btn" data-emote="gather" title="Gather">📍</button>
 			</div>
+			<div class="tw-chat-phrases">
+				<button type="button" class="tw-phrase-btn" data-phrase="biting">🎣 狂咬口</button>
+				<button type="button" class="tw-phrase-btn" data-phrase="board">🚤 快上船</button>
+				<button type="button" class="tw-phrase-btn" data-phrase="rally">🏁 来飙车</button>
+				<button type="button" class="tw-phrase-btn" data-phrase="nice">👍 牛啊</button>
+			</div>
 			<form class="tw-chat-form">
 				<input type="text" class="tw-chat-input" maxlength="160" />
 				<button type="submit" class="tw-chat-send"></button>
@@ -2171,6 +2177,17 @@ export class UI {
 
 				e.stopPropagation();
 				callHook( this.onEmoteSend, eb.dataset.emote );
+
+			} );
+
+		}
+
+		for ( const pb of this.chatEl.querySelectorAll( '[data-phrase]' ) ) {
+
+			pb.addEventListener( 'click', ( e ) => {
+
+				e.stopPropagation();
+				callHook( this.onQuickChat, pb.dataset.phrase );
 
 			} );
 
@@ -3738,7 +3755,8 @@ export class UI {
 			if ( st.status === 'connected' ) {
 
 				const total = ( st.peerCount || 0 ) + 1;
-				txt.textContent = getLang() === 'zh' ? `联机 · ${ total }人` : `Online · ${ total }`;
+				const pingTxt = Number.isFinite( st.pingMs ) ? ` · ${ st.pingMs }ms` : '';
+				txt.textContent = ( getLang() === 'zh' ? `联机 · ${ total }人` : `Online · ${ total }` ) + pingTxt;
 
 			} else if ( st.status === 'connecting' ) {
 
@@ -3758,11 +3776,53 @@ export class UI {
 
 		if ( this.chatInputEl ) this.chatInputEl.placeholder = tr( 'Type chat message…' );
 		if ( this.chatSendBtn ) this.chatSendBtn.textContent = tr( 'Send' );
+		if ( this.chatEl ) {
+
+			const zh = getLang() === 'zh';
+			const labels = {
+				biting: zh ? '🎣 狂咬口' : '🎣 Biting!',
+				board: zh ? '🚤 快上船' : '🚤 Hop on',
+				rally: zh ? '🏁 来飙车' : '🏁 Race?',
+				nice: zh ? '👍 牛啊' : '👍 Nice!',
+			};
+			for ( const pb of this.chatEl.querySelectorAll( '[data-phrase]' ) ) {
+
+				if ( labels[ pb.dataset.phrase ] ) pb.textContent = labels[ pb.dataset.phrase ];
+
+			}
+
+		}
+
+	}
+
+	setRallyRaceState( summary ) {
+
+		if ( ! this.tourneyEl ) return;
+		if ( ! summary || ! summary.active ) {
+
+			if ( ! this._tourneyActive ) this.tourneyEl.hidden = true;
+			return;
+
+		}
+
+		const zh = getLang() === 'zh';
+		const headTxt = ! summary.started
+			? ( zh ? `🏁 联机越野赛 · ${ Math.max( 1, Math.ceil( summary.countdownSec ) ) }s 后发车` : `🏁 MP Rally · ${ Math.max( 1, Math.ceil( summary.countdownSec ) ) }s` )
+			: ( zh ? `🏁 联机越野赛 · ${ summary.elapsedSec.toFixed( 1 ) }s` : `🏁 MP Rally · ${ summary.elapsedSec.toFixed( 1 ) }s` );
+		const rowsHtml = ( summary.rows || [] ).slice( 0, 5 ).map( ( r, idx ) => {
+
+			const metric = r.finishSec !== null ? `${ r.finishSec.toFixed( 2 ) }s` : ( zh ? `门 ${ r.gateIndex }/10` : `Gate ${ r.gateIndex }/10` );
+			return `<div class="tw-t-row"><span>${ idx + 1 }. <i style="background:${ esc( r.color ) }"></i>${ esc( r.name ) }</span><b>${ metric }</b></div>`;
+
+		} ).join( '' );
+		this.tourneyEl.hidden = false;
+		this.tourneyEl.innerHTML = `<div class="tw-t-head"><span>${ esc( headTxt ) }</span></div>${ rowsHtml }`;
 
 	}
 
 	setTournamentState( summary ) {
 
+		this._tourneyActive = !! ( summary && summary.active );
 		if ( ! this.tourneyEl ) return;
 		if ( ! summary || ! summary.active ) {
 

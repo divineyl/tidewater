@@ -2,6 +2,7 @@ import { WORLD } from '../world/WorldLayout.js';
 import { STAND } from './FishStand.js';
 import { CHANDLERY } from './Chandlery.js';
 import { LANDMARKS } from './Landmarks.js';
+import { DIVE_TREASURES } from './DiveTreasures.js';
 import { getLang, onLangChange, tr } from '../i18n/i18n.js';
 import {
 	waypointDistance, waypointBearingDeg, compassCardinal,
@@ -113,6 +114,9 @@ const CSS = /* css */`
 .gm-fm-pin.is-waypoint > i { background: #5ce0d2; color: #05201c; animation: gm-map-pulse 1.4s var(--tw-ease-io) infinite; }
 .gm-fm-pin.is-landmark > i { width: calc(12 * var(--tw-u)); height: calc(12 * var(--tw-u)); background: rgba(255, 214, 102, 0.25); color: #ffd166; border: 1.5px solid #ffd166; box-shadow: none; }
 .gm-fm-pin.is-landmark.is-done > i { background: #ffd166; color: #1a1004; }
+.gm-fm-pin.is-treasure > i { width: calc(10 * var(--tw-u)); height: calc(10 * var(--tw-u)); background: rgba(92, 224, 210, 0.28); border: 1.5px solid #5ce0d2; box-shadow: none; }
+.gm-fm-pin.is-trap > i { width: calc(12 * var(--tw-u)); height: calc(12 * var(--tw-u)); background: #ff7b5c; border: 1.5px solid #fff; box-shadow: none; }
+.gm-fm-pin.is-trap.is-ready > i { background: #ffd166; animation: gm-map-pulse 1.2s var(--tw-ease-io) infinite; }
 .gm-fm-pin.is-peer { z-index: 3; }
 .gm-fm-pin.is-peer > i { width: calc(16 * var(--tw-u)); height: calc(16 * var(--tw-u)); }
 .gm-fm-pin.is-player { z-index: 4; }
@@ -372,6 +376,24 @@ export class Minimap {
 			return { lm, el };
 
 		} );
+		this.treasurePins = DIVE_TREASURES.map( ( t ) => {
+
+			const el = h( 'div', 'gm-fm-pin is-treasure', '<i></i>' );
+			const f = worldToMapFraction( t.x, t.z, X0, Z0, EXT );
+			el.style.left = `${ ( sat( f.u ) * 100 ).toFixed( 2 ) }%`;
+			el.style.top = `${ ( sat( f.v ) * 100 ).toFixed( 2 ) }%`;
+			this.fmMarks.append( el );
+			return { t, el };
+
+		} );
+		this.trapPins = Array.from( { length: 4 }, () => {
+
+			const el = h( 'div', 'gm-fm-pin is-trap', '<i></i>' );
+			el.style.display = 'none';
+			this.fmMarks.append( el );
+			return el;
+
+		} );
 
 		// Interactions
 		this.el.addEventListener( 'click', ( e ) => {
@@ -602,6 +624,42 @@ export class Minimap {
 				const rec = lms[ lp.lm.id ];
 				const done = !! ( rec && ( rec === true || rec.visited ) );
 				lp.el.classList.toggle( 'is-done', done );
+
+			}
+
+		}
+
+		if ( this.treasurePins ) {
+
+			const trs = this.game?.state?.treasures || {};
+			for ( const tp of this.treasurePins ) {
+
+				tp.el.style.display = trs[ tp.t.id ] ? 'none' : '';
+
+			}
+
+		}
+
+		if ( this.trapPins ) {
+
+			const traps = this.game?.crabTraps?.traps || [];
+			for ( let i = 0; i < this.trapPins.length; i ++ ) {
+
+				const el = this.trapPins[ i ];
+				const trap = traps[ i ];
+				if ( ! trap ) {
+
+					el.style.display = 'none';
+
+				} else {
+
+					el.style.display = '';
+					el.classList.toggle( 'is-ready', !! trap.ready );
+					const f = worldToMapFraction( trap.x, trap.z, X0, Z0, EXT );
+					el.style.left = `${ ( sat( f.u ) * 100 ).toFixed( 2 ) }%`;
+					el.style.top = `${ ( sat( f.v ) * 100 ).toFixed( 2 ) }%`;
+
+				}
 
 			}
 

@@ -2,6 +2,7 @@ import { Peer } from 'peerjs';
 import { Vector3 } from '../engine/index.js';
 import { G } from '../engine/render/Frame.js';
 import { FISH } from '../game/FishTable.js';
+import { getTitleLabel } from '../game/Achievements.js';
 import { getLang, tr, trFish } from '../i18n/i18n.js';
 import {
 	generateRoomCode,
@@ -11,6 +12,7 @@ import {
 	pickPlayerColor,
 	sanitizeMessage,
 	interpolatePeer,
+	QUICK_PHRASES,
 } from './NetProtocol.js';
 import { RemotePlayerAvatar } from './RemotePlayerAvatar.js';
 
@@ -21,7 +23,7 @@ const PEER_ICE_CONFIG = {
 	],
 };
 
-const HOST_ONLY_TYPES = new Set( [ 'welcome', 'world', 'peer_join', 'peer_leave', 'tourney_start', 'tourney_end' ] );
+const HOST_ONLY_TYPES = new Set( [ 'welcome', 'world', 'peer_join', 'peer_leave', 'tourney_start', 'tourney_end', 'rally_start' ] );
 
 const _proj = new Vector3();
 const _camFwd = new Vector3();
@@ -81,14 +83,22 @@ export class MultiplayerManager {
 
 		this._sendTimer = 0;
 		this._worldTimer = 0;
+		this._pingTimer = 0;
+		this._pingSeq = 0;
+		this.pingMs = null;
+		this._reconnectTimer = null;
+		this._reconnectAttempts = 0;
+		this._lastJoinTarget = null;
 		this._lastYaw = 0;
 		this._lastMode = '';
 		this._lastWeatherKey = '';
 
 		this.tournament = null;
+		this.rallyRace = null;
 		this.onStateChange = null;
 		this.onChat = null;
 		this.onTournamentChange = null;
+		this.onRallyRaceChange = null;
 
 	}
 
@@ -108,6 +118,23 @@ export class MultiplayerManager {
 	isDesktopAvailable() {
 
 		return Boolean( typeof window !== 'undefined' && window.tidewaterDesktop && window.tidewaterDesktop.isDesktop );
+
+	}
+
+	_buildIceConfig() {
+
+		const iceServers = PEER_ICE_CONFIG.iceServers.map( ( s ) => ( { ...s } ) );
+		const p = this.app?.prefs?.data;
+		if ( p && typeof p.customTurnUrl === 'string' && /^turns?:[^\s]+$/i.test( p.customTurnUrl ) ) {
+
+			const entry = { urls: p.customTurnUrl };
+			if ( p.customTurnUser ) entry.username = p.customTurnUser;
+			if ( p.customTurnCred ) entry.credential = p.customTurnCred;
+			iceServers.push( entry );
+
+		}
+
+		return { iceServers };
 
 	}
 
@@ -149,6 +176,8 @@ export class MultiplayerManager {
 			addresses: [ ...this.addresses ],
 			errorMessage: this.errorMessage,
 			nickname: this.nickname,
+			title: this.app?.prefs?.data?.activeTitle || '',
+			pingMs: this.pingMs,
 			peerCount: this.peers.size,
 			peers: this.getPeersList(),
 		};
@@ -165,6 +194,7 @@ export class MultiplayerManager {
 				id: p.id,
 				name: p.name,
 				color: p.color,
+				title: p.title || '',
 				x: st ? st.x : 0,
 				y: st ? st.y : 0,
 				z: st ? st.z : 0,
@@ -224,7 +254,7 @@ export class MultiplayerManager {
 			let peer;
 			try {
 
-				peer = new Peer( peerId, { debug: 0, config: PEER_ICE_CONFIG } );
+				peer = new Peer( peerId, { debug: 0, config: this._buildIceConfig() } );
 
 			} catch ( err ) {
 
@@ -323,7 +353,7 @@ export class MultiplayerManager {
 				remoteId = msg.id || msg.from || conn.peer;
 				if ( ! remoteId || remoteId === this.selfId ) return;
 				this._hostConns.set( remoteId, conn );
-				this._upsertPeer( remoteId, msg.name, msg.color, true );
+				this._upsertPeer( remoteId, msg.name, msg.color, true, msg.title );
 
 				const welcome = {
 					t: 'welcome',
@@ -343,6 +373,7 @@ export class MultiplayerManager {
 					id: remoteId,
 					name: msg.name,
 					color: msg.color,
+					title: msg.title || '',
 				}, remoteId );
 				return;
 
@@ -400,6 +431,7 @@ export class MultiplayerManager {
 		this._emitState();
 
 		const hostPeerId = roomCodeToPeerId( norm );
+		this._lastJoinTarget = { mode: 'p2p', target: norm };
 		const gen = this._connGen;
 
 		return new Promise( ( resolve ) => {
@@ -408,7 +440,7 @@ export class MultiplayerManager {
 			let peer;
 			try {
 
-				peer = new Peer( { debug: 0, config: PEER_ICE_CONFIG } );
+				peer = new Peer( { debug: 0, config: this._buildIceConfig() } );
 
 			} catch ( err ) {
 
@@ -470,6 +502,7 @@ export class MultiplayerManager {
 							id: this.selfId,
 							name: this.nickname,
 							color: this.selfColor,
+							title: this.app?.prefs?.data?.activeTitle || '',
 						} );
 
 					} catch ( err ) {
@@ -518,7 +551,8 @@ export class MultiplayerManager {
 					} else if ( this.status === 'connected' ) {
 
 						this._emitChat( { kind: 'system', text: tr( 'Disconnected from room' ) } );
-						this.disconnect( true );
+						const tgt = this._lastJoinTarget;
+						this.disconnect( true ).then( () => this._scheduleReconnect( tgt ) );
 
 					}
 
@@ -613,6 +647,7 @@ export class MultiplayerManager {
 		this.roomCode = parsed.display;
 		this.addresses = [ parsed.display ];
 		this.errorMessage = '';
+		this._lastJoinTarget = { mode: 'lan', target: parsed.display };
 		this._emitState();
 
 		return this._connectLanWebSocket( parsed.url, false );
@@ -689,6 +724,7 @@ export class MultiplayerManager {
 						id: this.selfId,
 						name: this.nickname,
 						color: this.selfColor,
+						title: this.app?.prefs?.data?.activeTitle || '',
 					} ) );
 
 				} catch ( err ) {
@@ -720,7 +756,7 @@ export class MultiplayerManager {
 
 					const peerId = msg.id || msg.from;
 					if ( ! peerId || peerId === this.selfId ) return;
-					this._upsertPeer( peerId, msg.name, msg.color, true );
+					this._upsertPeer( peerId, msg.name, msg.color, true, msg.title );
 					this._sendRaw( {
 						t: 'welcome',
 						from: this.selfId,
@@ -769,7 +805,8 @@ export class MultiplayerManager {
 				} else if ( this.status === 'connected' ) {
 
 					this._emitChat( { kind: 'system', text: tr( 'Disconnected from room' ) } );
-					this.disconnect( true );
+					const tgt = this._lastJoinTarget;
+					this.disconnect( true ).then( () => this._scheduleReconnect( tgt ) );
 
 				}
 
@@ -792,6 +829,20 @@ export class MultiplayerManager {
 
 			clearTimeout( this._connectTimer );
 			this._connectTimer = null;
+
+		}
+
+		if ( this._reconnectTimer ) {
+
+			clearTimeout( this._reconnectTimer );
+			this._reconnectTimer = null;
+
+		}
+
+		if ( ! silent ) {
+
+			this._lastJoinTarget = null;
+			this._reconnectAttempts = 0;
 
 		}
 
@@ -835,8 +886,11 @@ export class MultiplayerManager {
 		this.roomCode = '';
 		this.addresses = [];
 		this._hostId = null;
+		this.pingMs = null;
 		this.tournament = null;
+		this.rallyRace = null;
 		this._emitTournament();
+		this._emitRallyRace();
 		if ( ! silent ) {
 
 			this.errorMessage = '';
@@ -925,9 +979,26 @@ export class MultiplayerManager {
 
 	_allMemberDescriptors() {
 
-		const list = [ { id: this.selfId, name: this.nickname, color: this.selfColor } ];
-		for ( const p of this.peers.values() ) list.push( { id: p.id, name: p.name, color: p.color } );
+		const list = [ { id: this.selfId, name: this.nickname, color: this.selfColor, title: this.app?.prefs?.data?.activeTitle || '' } ];
+		for ( const p of this.peers.values() ) list.push( { id: p.id, name: p.name, color: p.color, title: p.title || '' } );
 		return list;
+
+	}
+
+	_scheduleReconnect( target ) {
+
+		if ( ! target || this._reconnectAttempts >= 2 ) return;
+		this._reconnectAttempts ++;
+		const gen = this._connGen;
+		const zh = getLang() === 'zh';
+		this._emitChat( { kind: 'system', text: zh ? `网络波动，正在尝试第 ${ this._reconnectAttempts } 次自动重连…` : `Reconnecting (${ this._reconnectAttempts }/2)…` } );
+		this._reconnectTimer = setTimeout( () => {
+
+			if ( gen !== this._connGen || this.status !== 'offline' ) return;
+			if ( target.mode === 'p2p' ) this.joinP2P( target.target );
+			else if ( target.mode === 'lan' ) this.joinLAN( target.target );
+
+		}, 2500 );
 
 	}
 
@@ -973,18 +1044,34 @@ export class MultiplayerManager {
 
 	}
 
-	_upsertPeer( id, name, color, announce = false ) {
+	_upsertPeer( id, name, color, announce = false, title = '' ) {
 
 		if ( ! id || id === this.selfId ) return null;
 		let peer = this.peers.get( id );
+		const syncTitleEl = ( p ) => {
+
+			if ( ! p.nameplateEl ) return;
+			const tEl = p.nameplateEl.querySelector( '.tw-np-title' );
+			if ( tEl ) {
+
+				const lbl = getTitleLabel( p.title, getLang() );
+				tEl.textContent = lbl;
+				tEl.hidden = ! lbl;
+
+			}
+
+		};
+
 		if ( peer ) {
 
 			peer.name = name || peer.name;
 			peer.color = color || peer.color;
+			if ( title !== undefined && title !== '' ) peer.title = title;
 			if ( peer.nameplateEl ) {
 
 				const lbl = peer.nameplateEl.querySelector( '.tw-np-name' );
 				if ( lbl ) lbl.textContent = peer.name;
+				syncTitleEl( peer );
 
 			}
 
@@ -1001,7 +1088,7 @@ export class MultiplayerManager {
 			el = document.createElement( 'div' );
 			el.className = 'tw-nameplate';
 			el.hidden = true;
-			el.innerHTML = `<span class="tw-np-dot"></span><span class="tw-np-name"></span><span class="tw-np-dist"></span>`;
+			el.innerHTML = `<span class="tw-np-dot"></span><span class="tw-np-title" hidden></span><span class="tw-np-name"></span><span class="tw-np-dist"></span><span class="tw-np-bubble" hidden></span>`;
 			el.querySelector( '.tw-np-dot' ).style.background = color;
 			el.querySelector( '.tw-np-name' ).textContent = name;
 			const layer = this.app?.ui?.ui?.nameplatesEl;
@@ -1013,12 +1100,13 @@ export class MultiplayerManager {
 			x: 20, y: 2, z: - 20, yaw: 0, pitch: 0, speed: 0, mode: 'walk', vehId: null,
 			paint: 'stock', lightOn: false, lightTint: 'warm', rodOut: false,
 			boatPaint: 'classic', boatName: '', castPhase: 'idle', bobX: null, bobY: null, bobZ: null,
-			catchSpecies: '', ridingPeerId: '',
+			catchSpecies: '', ridingPeerId: '', title: title || '',
 		};
 		peer = {
 			id,
 			name,
 			color,
+			title: title || '',
 			avatar,
 			nameplateEl: el,
 			renderState: { ...initial },
@@ -1026,7 +1114,10 @@ export class MultiplayerManager {
 			lastSeen: performance.now(),
 			emoteUntil: 0,
 			emoteBadge: '',
+			chatBubbleUntil: 0,
+			chatBubble: '',
 		};
+		syncTitleEl( peer );
 		this.peers.set( id, peer );
 		this._emitState();
 
@@ -1079,10 +1170,11 @@ export class MultiplayerManager {
 
 			case 'welcome':
 				if ( this.role === 'host' ) break;
+				this._reconnectAttempts = 0;
 				this._hostId = msg.hostId || senderId;
 				for ( const m of msg.peers || [] ) {
 
-					if ( m.id !== this.selfId ) this._upsertPeer( m.id, m.name, m.color, false );
+					if ( m.id !== this.selfId ) this._upsertPeer( m.id, m.name, m.color, false, m.title );
 
 				}
 
@@ -1095,7 +1187,7 @@ export class MultiplayerManager {
 			case 'peer_join':
 				if ( msg.id && msg.id !== this.selfId ) {
 
-					this._upsertPeer( msg.id, msg.name, msg.color, true );
+					this._upsertPeer( msg.id, msg.name, msg.color, true, msg.title );
 
 				}
 
@@ -1109,7 +1201,21 @@ export class MultiplayerManager {
 
 				if ( ! senderId ) break;
 				let peer = this.peers.get( senderId );
-				if ( ! peer ) peer = this._upsertPeer( senderId, `Angler-${ senderId.slice( - 3 ) }`, pickPlayerColor( senderId ), false );
+				if ( ! peer ) peer = this._upsertPeer( senderId, `Angler-${ senderId.slice( - 3 ) }`, pickPlayerColor( senderId ), false, msg.title );
+				else if ( msg.title !== undefined && msg.title !== peer.title ) {
+
+					peer.title = msg.title;
+					const tEl = peer.nameplateEl?.querySelector?.( '.tw-np-title' );
+					if ( tEl ) {
+
+						const lbl = getTitleLabel( peer.title, getLang() );
+						tEl.textContent = lbl;
+						tEl.hidden = ! lbl;
+
+					}
+
+				}
+
 				peer.targetState = { ...msg };
 				peer.lastSeen = performance.now();
 				if ( Math.hypot( peer.renderState.x - msg.x, peer.renderState.z - msg.z ) > 60 ) {
@@ -1223,6 +1329,89 @@ export class MultiplayerManager {
 
 			}
 
+			case 'ping': {
+
+				if ( this.role === 'host' && senderId ) {
+
+					this._sendRaw( { t: 'pong', from: this.selfId, to: senderId, seq: msg.seq, ts: msg.ts } );
+
+				}
+
+				break;
+
+			}
+
+			case 'pong': {
+
+				if ( this.role === 'guest' && msg.ts > 0 ) {
+
+					this.pingMs = Math.max( 1, Math.round( performance.now() - msg.ts ) );
+					this._emitState();
+
+				}
+
+				break;
+
+			}
+
+			case 'quick_chat': {
+
+				const spec = QUICK_PHRASES[ msg.phraseId ];
+				if ( ! spec ) break;
+				const zh = getLang() === 'zh';
+				const text = zh ? spec.fullZh : spec.fullEn;
+				this._emitChat( { kind: 'chat', name: msg.name, color: msg.color, text } );
+				this.app?.audio?.uiChime?.( 'chat' );
+				const peer = senderId ? this.peers.get( senderId ) : null;
+				if ( peer ) {
+
+					peer.chatBubble = zh ? spec.shortZh : spec.shortEn;
+					peer.chatBubbleUntil = performance.now() + 5000;
+
+				}
+
+				break;
+
+			}
+
+			case 'rally_start': {
+
+				if ( ! fromHost ) break;
+				this._initRallyRaceLocal( msg.id, msg.countdownSec );
+				break;
+
+			}
+
+			case 'rally_progress': {
+
+				if ( ! this.rallyRace || ! this.rallyRace.active || msg.raceId !== this.rallyRace.id ) break;
+				const rid = senderId || msg.from;
+				const row = this.rallyRace.racers.get( rid ) || { id: rid, name: msg.name, color: msg.color, gateIndex: 0, elapsedSec: 0, finishSec: null };
+				row.gateIndex = Math.max( row.gateIndex, msg.gateIndex );
+				row.elapsedSec = msg.elapsedSec;
+				this.rallyRace.racers.set( rid, row );
+				this._emitRallyRace();
+				break;
+
+			}
+
+			case 'rally_finish': {
+
+				if ( ! this.rallyRace || ! this.rallyRace.active || msg.raceId !== this.rallyRace.id ) break;
+				const rid = senderId || msg.from;
+				const row = this.rallyRace.racers.get( rid ) || { id: rid, name: msg.name, color: msg.color, gateIndex: 10, elapsedSec: msg.elapsedSec, finishSec: null };
+				row.gateIndex = 10;
+				row.finishSec = msg.elapsedSec;
+				this.rallyRace.racers.set( rid, row );
+				const zh = getLang() === 'zh';
+				const line = zh ? `🏁 ${ row.name } 完成联机越野赛（${ msg.elapsedSec.toFixed( 2 ) } 秒）！` : `🏁 ${ row.name } finished the MP rally in ${ msg.elapsedSec.toFixed( 2 ) }s!`;
+				this._emitChat( { kind: 'catch', color: row.color, text: line } );
+				this.app?.ui?.ui?.toast?.( line, 3600 );
+				this._emitRallyRace();
+				break;
+
+			}
+
 		}
 
 	}
@@ -1331,6 +1520,7 @@ export class MultiplayerManager {
 			bobZ: lineActive ? Number( rod.bobber.z.toFixed( 2 ) ) : null,
 			catchSpecies: castPhase === 'landing' ? ( app?.game?.landing?.species || '' ) : '',
 			ridingPeerId: p.mode === 'coop' && p.coop ? p.coop.peerId : '',
+			title: app?.prefs?.data?.activeTitle || '',
 		};
 
 	}
@@ -1574,9 +1764,213 @@ export class MultiplayerManager {
 
 	}
 
+	sendQuickChat( phraseId = 'biting' ) {
+
+		const spec = QUICK_PHRASES[ phraseId ];
+		if ( ! spec || this.status !== 'connected' ) return false;
+		const zh = getLang() === 'zh';
+		this._emitChat( { kind: 'chat', name: this.nickname, color: this.selfColor, text: zh ? spec.fullZh : spec.fullEn, self: true } );
+		this._sendRaw( {
+			t: 'quick_chat',
+			from: this.selfId,
+			name: this.nickname,
+			color: this.selfColor,
+			phraseId,
+		} );
+		return true;
+
+	}
+
+	_emitRallyRace() {
+
+		if ( typeof this.onRallyRaceChange === 'function' ) {
+
+			try { this.onRallyRaceChange( this.getRallyRaceSummary() ); } catch { /* ignore */ }
+
+		}
+
+	}
+
+	getRallyRaceSummary() {
+
+		const r = this.rallyRace;
+		if ( ! r || ! r.active ) return null;
+		const rows = [ ...r.racers.values() ].sort( ( a, b ) => {
+
+			if ( a.finishSec !== null && b.finishSec !== null ) return a.finishSec - b.finishSec;
+			if ( a.finishSec !== null ) return - 1;
+			if ( b.finishSec !== null ) return 1;
+			return b.gateIndex - a.gateIndex || a.elapsedSec - b.elapsedSec;
+
+		} );
+		return {
+			id: r.id,
+			active: r.active,
+			countdownSec: Math.max( 0, r.countdownSec ),
+			elapsedSec: r.elapsedSec,
+			started: r.started,
+			rows,
+		};
+
+	}
+
+	_initRallyRaceLocal( id, countdownSec = 3 ) {
+
+		const racers = new Map();
+		racers.set( this.selfId, { id: this.selfId, name: this.nickname, color: this.selfColor, gateIndex: 0, elapsedSec: 0, finishSec: null } );
+		for ( const p of this.peers.values() ) {
+
+			racers.set( p.id, { id: p.id, name: p.name, color: p.color, gateIndex: 0, elapsedSec: 0, finishSec: null } );
+
+		}
+
+		this.rallyRace = { id, active: true, countdownSec, lastBeep: Math.ceil( countdownSec ), elapsedSec: 0, started: false, racers };
+		const zh = getLang() === 'zh';
+		this._emitChat( { kind: 'system', text: zh ? '🏁 房主发起了东岬联机越野竞速！倒计时准备…' : '🏁 MP Rally race countdown started!' } );
+		this.app?.ui?.ui?.toast?.( zh ? '东岬联机越野赛 3 秒后发车！骑上载具或按 U 开赛' : 'MP Rally starting in 3s! Mount a vehicle!', 3000 );
+		this._emitRallyRace();
+
+	}
+
+	startMultiplayerRally( countdownSec = 3 ) {
+
+		if ( this.status !== 'connected' || this.role !== 'host' ) return false;
+		const id = `r_${ Date.now().toString( 36 ) }`;
+		this._initRallyRaceLocal( id, countdownSec );
+		this._sendRaw( { t: 'rally_start', from: this.selfId, id, countdownSec } );
+		return true;
+
+	}
+
+	reportRallyProgress( gateIndex, elapsedSec ) {
+
+		if ( ! this.rallyRace || ! this.rallyRace.active ) return;
+		const row = this.rallyRace.racers.get( this.selfId );
+		if ( row ) {
+
+			row.gateIndex = Math.max( row.gateIndex, gateIndex | 0 );
+			row.elapsedSec = elapsedSec;
+
+		}
+
+		if ( this.status === 'connected' ) {
+
+			this._sendRaw( {
+				t: 'rally_progress',
+				from: this.selfId,
+				raceId: this.rallyRace.id,
+				name: this.nickname,
+				color: this.selfColor,
+				gateIndex,
+				elapsedSec,
+			} );
+
+		}
+
+		this._emitRallyRace();
+
+	}
+
+	reportRallyFinish( elapsedSec, vehicleId = 'motorcycle' ) {
+
+		if ( ! this.rallyRace || ! this.rallyRace.active ) return;
+		const row = this.rallyRace.racers.get( this.selfId );
+		if ( row ) {
+
+			row.gateIndex = 10;
+			row.finishSec = elapsedSec;
+
+		}
+
+		if ( this.status === 'connected' ) {
+
+			this._sendRaw( {
+				t: 'rally_finish',
+				from: this.selfId,
+				raceId: this.rallyRace.id,
+				name: this.nickname,
+				color: this.selfColor,
+				elapsedSec,
+				vehicleId,
+			} );
+
+		}
+
+		this._emitRallyRace();
+
+	}
+
 	update( dt ) {
 
 		if ( this.status !== 'connected' ) return;
+
+		if ( this.role === 'guest' && this._hostId ) {
+
+			this._pingTimer -= dt;
+			if ( this._pingTimer <= 0 ) {
+
+				this._pingTimer = 3.5;
+				this._sendRaw( {
+					t: 'ping',
+					from: this.selfId,
+					to: this._hostId,
+					seq: ++ this._pingSeq,
+					ts: Math.round( performance.now() ),
+				} );
+
+			}
+
+		}
+
+		if ( this.rallyRace && this.rallyRace.active ) {
+
+			const r = this.rallyRace;
+			if ( ! r.started ) {
+
+				r.countdownSec -= dt;
+				const ceil = Math.ceil( r.countdownSec );
+				if ( ceil > 0 && ceil < r.lastBeep ) {
+
+					r.lastBeep = ceil;
+					this.app?.audio?.uiChime?.( 'countdown' );
+					this._emitRallyRace();
+
+				}
+
+				if ( r.countdownSec <= 0 ) {
+
+					r.started = true;
+					r.countdownSec = 0;
+					this.app?.audio?.uiChime?.( 'go' );
+					const p = this.app?.player;
+					if ( p?.mode === 'vehicle' && p.activeVehicle ) this.app?.game?.rally?.start?.( p.activeVehicle.id );
+					const zh = getLang() === 'zh';
+					this.app?.ui?.ui?.toast?.( zh ? 'GO! 冲向灯塔终点！' : 'GO! Head for the lighthouse!', 2400 );
+					this._emitRallyRace();
+
+				}
+
+			} else {
+
+				r.elapsedSec += dt;
+				this._rallyUiT = ( this._rallyUiT || 0 ) + dt;
+				if ( this._rallyUiT >= 0.4 ) {
+
+					this._rallyUiT = 0;
+					this._emitRallyRace();
+
+				}
+
+				if ( r.elapsedSec >= 180 ) {
+
+					r.active = false;
+					this._emitRallyRace();
+
+				}
+
+			}
+
+		}
 
 		const st = this._readLocalState();
 		if ( st ) {
@@ -1684,6 +2078,15 @@ export class MultiplayerManager {
 
 				const emoteTxt = ( peer.emoteUntil > now && peer.emoteBadge ) ? ` ${ peer.emoteBadge }` : '';
 				distEl.textContent = ( dist >= 12 ? ` · ${ Math.round( dist ) } m` : '' ) + emoteTxt;
+
+			}
+
+			const bubEl = el.querySelector( '.tw-np-bubble' );
+			if ( bubEl ) {
+
+				const showBub = peer.chatBubbleUntil > now && peer.chatBubble;
+				bubEl.hidden = ! showBub;
+				if ( showBub ) bubEl.textContent = peer.chatBubble;
 
 			}
 

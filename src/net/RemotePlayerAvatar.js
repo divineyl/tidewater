@@ -1,10 +1,12 @@
 import {
-	Group, Mesh, BoxGeometry, SphereGeometry, CylinderGeometry, Color, MathUtils, Vector3, Quaternion,
+	Group, Mesh, BoxGeometry, SphereGeometry, CylinderGeometry, PlaneGeometry, Color, MathUtils, Vector3, Quaternion,
 } from '../engine/index.js';
+import { Texture } from '../engine/gpu/Texture.js';
 import { LAYERS } from '../core/SceneRenderer.js';
 import { standard } from '../materials/Materials.js';
 import { VEHICLE_PAINTS, VEHICLE_LIGHT_TINTS } from '../vehicles/Vehicle.js';
 import { BOAT_PAINTS } from '../game/Gear.js';
+import { paintNameplateCanvas } from '../world/BoatModel.js';
 
 const _yUp = new Vector3( 0, 1, 0 );
 const _tipL = new Vector3();
@@ -47,6 +49,7 @@ export class RemotePlayerAvatar {
 		this._phase = 0;
 		this._paintId = 'stock';
 		this._boatPaintId = 'classic';
+		this._boatName = '';
 		this._lightTint = 'warm';
 		this._lightOn = false;
 		this._emoteTimer = 0;
@@ -192,6 +195,38 @@ export class RemotePlayerAvatar {
 		mkPart( g, new CylinderGeometry( 0.07, 0.07, 0.70, 8 ), this.chromeMat, 0, 2.02, 0.85 );
 		mkPart( g, new BoxGeometry( 0.36, 0.50, 0.22 ), this.shirtMat, 0.28, 1.08, 0.35 );
 		mkPart( g, new SphereGeometry( 0.14, 10, 8 ), this.skinMat, 0.28, 1.44, 0.35 );
+
+		this._boatNameTex = new Texture( {
+			width: 512, height: 128, format: 'rgba8unorm',
+			usage: [ 'sample', 'copyDst' ], sampler: 'linearClamp', label: `remote-boat-name-${ this.id }`,
+		} );
+		this._boatNameCanvas = typeof document !== 'undefined' ? document.createElement( 'canvas' ) : null;
+		if ( this._boatNameCanvas ) {
+
+			this._boatNameCanvas.width = 512;
+			this._boatNameCanvas.height = 128;
+
+		}
+
+		const npMat = standard( {
+			textures: { nameTex: this._boatNameTex },
+			transparent: true,
+			depthWrite: false,
+			roughness: 0.3,
+			surface: /* wgsl */`
+				let t = textureSample( nameTex, smpLinearClamp, vec2f( in.uv.x, 1.0 - in.uv.y ) );
+				if ( t.a < 0.08 ) { discard; }
+				s.albedo = t.rgb;
+				s.alpha = t.a;
+			`,
+		} );
+		this._boatNameMesh = new Mesh( new PlaneGeometry( 1.44, 0.34 ), npMat );
+		this._boatNameMesh.position.set( 0, 0.32, - 3.318 );
+		this._boatNameMesh.rotation.y = Math.PI;
+		this._boatNameMesh.visible = false;
+		this._boatNameMesh.renderOrder = 2;
+		g.add( this._boatNameMesh );
+
 		this.group.add( g );
 
 	}
@@ -220,12 +255,32 @@ export class RemotePlayerAvatar {
 		}
 
 		const boatPaintId = hasOwn( BOAT_PAINTS, state.boatPaint ) ? state.boatPaint : 'classic';
-		if ( boatPaintId !== this._boatPaintId ) {
+		const paintChanged = boatPaintId !== this._boatPaintId;
+		if ( paintChanged ) {
 
 			this._boatPaintId = boatPaintId;
 			const bSpec = BOAT_PAINTS[ boatPaintId ];
 			this.hullMat.uniforms.color.value.set( bSpec.topside );
 			this.cabinMat.uniforms.color.value.set( bSpec.stripe === 0xf2efe6 ? 0x2a486e : CABIN );
+
+		}
+
+		const boatName = typeof state.boatName === 'string' ? state.boatName.trim().slice( 0, 18 ) : '';
+		if ( boatName !== this._boatName || ( paintChanged && boatName ) ) {
+
+			this._boatName = boatName;
+			if ( this._boatNameMesh ) {
+
+				this._boatNameMesh.visible = Boolean( boatName );
+				if ( boatName && this._boatNameCanvas && this._boatNameTex ) {
+
+					paintNameplateCanvas( this._boatNameCanvas, boatName, boatPaintId );
+					const ctx = this._boatNameCanvas.getContext( '2d' );
+					if ( ctx ) this._boatNameTex.upload( ctx.getImageData( 0, 0, 512, 128 ).data );
+
+				}
+
+			}
 
 		}
 
@@ -375,6 +430,8 @@ export class RemotePlayerAvatar {
 		} );
 		for ( const g of geometries ) g.dispose?.();
 		for ( const m of materials ) m.dispose?.();
+		this._boatNameTex?.destroy?.();
+		this._boatNameTex = null;
 		this.group.clear?.();
 		if ( scene && this.group.parent === scene ) scene.remove( this.group );
 		else if ( this.group.parent ) this.group.parent.remove?.( this.group );

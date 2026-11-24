@@ -5,6 +5,14 @@ import { Timer } from './math/Timer.js';
 import { MeshRenderer } from './render/MeshRenderer.js';
 import { FrameUniforms } from './render/Frame.js';
 
+export function shouldSkipFrameForCap( nowMs, lastMs, fpsCap ) {
+
+	const cap = Number( fpsCap ) || 0;
+	if ( cap <= 0 || ! Number.isFinite( lastMs ) || lastMs <= 0 ) return false;
+	return ( nowMs - lastMs ) < ( 1000 / cap ) - 1.5;
+
+}
+
 // Canvas, device, main camera / scene and the frame loop.
 export class Engine {
 
@@ -12,9 +20,18 @@ export class Engine {
 
 		this.container = container;
 		this.renderScale = 1;
+		this.fpsCap = 0;
+		this._lastTickMs = 0;
 		this.clock = new Timer();
 		this.frame = 0;
 		this.onResize = [];
+
+	}
+
+	setFpsCap( cap ) {
+
+		const v = Number( cap ) || 0;
+		this.fpsCap = ( v === 30 || v === 60 ) ? v : 0;
 
 	}
 
@@ -81,6 +98,14 @@ export class Engine {
 
 		const loop = ( t ) => {
 
+			if ( shouldSkipFrameForCap( t, this._lastTickMs, this.fpsCap ) ) {
+
+				this._raf = requestAnimationFrame( loop );
+				return;
+
+			}
+
+			this._lastTickMs = t;
 			this.clock.update( t );
 			let dt = this.clock.getDelta();
 			if ( dt > 0.1 ) dt = 0.1;

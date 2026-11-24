@@ -8,4 +8,5 @@ contextBridge.exposeInMainWorld( 'tidewaterDesktop', {
 	stopLanHost: () => ipcRenderer.invoke( 'lan:stop' ),
 	getLanInfo: () => ipcRenderer.invoke( 'lan:info' ),
 	createDesktopShortcut: () => ipcRenderer.invoke( 'desktop:createShortcut' ),
+	checkForUpdate: () => ipcRenderer.invoke( 'desktop:checkUpdate' ),
 } );

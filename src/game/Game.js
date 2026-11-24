@@ -15,6 +15,9 @@ import { Guide } from './Guide.js';
 import { applyCatchToBounties } from './Bounties.js';
 import { checkLandmarkDiscovery } from './Landmarks.js';
 import { RallyCourse, RALLY_GATES } from './RallyCourse.js';
+import { CrabTrapManager } from './CrabTraps.js';
+import { DiveTreasureManager, checkTreasureCollect } from './DiveTreasures.js';
+import { evaluateAchievements } from './Achievements.js';
 import { getLang, tr, trFish, trUpgradeName, trUpgradeLabel } from '../i18n/i18n.js';
 
 // how long the catch card stays up unless dismissed (ms)
@@ -58,9 +61,20 @@ export class Game {
 		this._pier = WORLD.pier;
 		this._tmp = new Vector3();
 		this._exploreT = 0;
+		this._achCheckT = 0;
 		this.rally = new RallyCourse( { scene: app.scene, terrain: app.terrainData } );
+		this.crabTraps = new CrabTrapManager( { scene: app.scene, terrain: app.terrainData } );
+		this.crabTraps.loadFromState( this.state.crabTraps );
+		this.diveTreasures = new DiveTreasureManager( { scene: app.scene, terrain: app.terrainData } );
+		this.diveTreasures.syncCollected( this.state.treasures );
+		this._unlockedAch = new Set( evaluateAchievements( this.state ).unlockedIds );
 		this.applyGear();
-		this.state.onChange( () => this.applyGear() );
+		this.state.onChange( () => {
+
+			this.applyGear();
+			this.diveTreasures?.syncCollected?.( this.state.treasures );
+
+		} );
 
 	}
 
@@ -201,6 +215,27 @@ export class Game {
 			this.rally.start( p.activeVehicle.id );
 			app.audio?.uiChime?.( 'checkpoint' );
 			this.toast( tr( 'Rally started! Follow the glowing gates to the lighthouse' ), 2600 );
+
+		}
+
+		const aboardOwnBoat = p.mode === 'boat' || p.mode === 'deck';
+		if ( aboardOwnBoat && ! panelOpen && ! uiBlocked && ! guideOpen && ! photo && this.crabTraps ) {
+
+			const bx = app.boatCtl?.position?.x ?? p.position.x;
+			const bz = app.boatCtl?.position?.z ?? p.position.z;
+			const nearTrap = this.crabTraps.findNearest( { x: bx, z: bz }, 14 );
+			if ( ! p.prompt && ! this.fight && nearTrap?.trap?.ready ) {
+
+				p.prompt = { key: 'K', text: 'Haul crab trap!' };
+
+			}
+
+			if ( inp.hit( 'KeyK' ) ) {
+
+				if ( nearTrap ) this.haulCrabTrap( nearTrap.trap.id );
+				else this.deployCrabTrap();
+
+			}
 
 		}
 
@@ -347,6 +382,8 @@ export class Game {
 			aiming: rod.equipped,
 			lure: rod.equipped ? this.state.lure : null,
 			rally: this.rally?.active ? { gate: this.rally.gateIndex, total: RALLY_GATES.length, elapsed: this.rally.elapsed } : null,
+			oxygen: ( p && p.mode === 'swim' && p.oxygen < 0.995 ) ? p.oxygen : null,
+			traps: this.crabTraps ? { deployed: this.crabTraps.traps.length, ready: this.crabTraps.traps.filter( ( t ) => t.ready ).length } : null,
 		} );
 		if ( this.minimap ) this.minimap.update( dt );
 		if ( this.guide ) this.guide.update( dt );
@@ -660,11 +697,102 @@ export class Game {
 
 	}
 
+	deployCrabTrap() {
+
+		const app = this.app;
+		const b = app.boatCtl;
+		if ( ! b || ! this.crabTraps ) return false;
+		const x = b.position.x, z = b.position.z;
+		const depth = app.terrainData ? Math.max( 0, - app.terrainData.heightAt( x, z ) ) : 5;
+		const reef = WORLD.reef;
+		const reefDist = Math.hypot( x - reef.center.x, z - reef.center.z ) - reef.radius;
+		const chk = this.crabTraps.canDeploy( x, z, depth );
+		const zh = getLang() === 'zh';
+		if ( ! chk.ok ) {
+
+			if ( chk.reason === 'max_traps' ) this.toast( zh ? '最多同时下放 4 只捕蟹笼（先起笼再放）' : 'Max 4 crab traps active (haul one first)', 2800 );
+			else if ( chk.reason === 'too_close' ) this.toast( zh ? '离已有蟹笼太近，再开出 10 米下笼' : 'Too close to another trap (move 10m away)', 2400 );
+			else this.toast( zh ? '此处水深太浅（需 ≥ 2.2 米）' : 'Too shallow for a crab trap (need ≥ 2.2 m)', 2400 );
+			return false;
+
+		}
+
+		const trap = this.crabTraps.deploy( x, z, depth, reefDist );
+		if ( ! trap ) return false;
+		this.state.setCrabTraps( this.crabTraps.serialize() );
+		app.audio?.fishSplash?.( b.position, 0.45 );
+		this.toast( zh ? `已下放捕蟹笼 #${ trap.id }（约 75 秒后浮标亮金即可起笼）` : `Crab trap #${ trap.id } deployed! Returns ready in ~75s`, 3000 );
+		return true;
+
+	}
+
+	haulCrabTrap( trapId ) {
+
+		if ( ! this.crabTraps ) return null;
+		const res = this.crabTraps.haul( trapId );
+		if ( ! res ) return null;
+		const { haul } = res;
+		const zh = getLang() === 'zh';
+		this.state.crabTraps = this.crabTraps.serialize();
+		this.app.audio?.uiChime?.( 'winch' );
+		if ( haul.items.length ) {
+
+			this.state.recordTrapHaul( haul.totalValue );
+			const summary = haul.items.map( ( it ) => `${ zh ? it.nameZh : it.nameEn } ${ it.kg.toFixed( 1 ) }kg` ).join( ' + ' );
+			this.toast( zh ? `起笼丰收！${ summary } · +$${ haul.totalValue }` : `Trap hauled! ${ summary } · +$${ haul.totalValue }`, 4200 );
+
+		} else {
+
+			this.state.recordTrapHaul( 5 );
+			this.toast( zh ? '蟹笼刚浸泡不久只有少许小蟹苗（+$5）' : 'Too early — just small bait crabs (+$5)', 2800 );
+
+		}
+
+		return res;
+
+	}
+
 	updateExploration( dt ) {
 
 		const app = this.app;
 		const p = app.player;
 		const zh = getLang() === 'zh';
+
+		if ( this.crabTraps ) {
+
+			const readyList = this.crabTraps.update( dt, app.cameraWaterHeight ?? 0 );
+			if ( readyList.length ) {
+
+				this.state.setCrabTraps( this.crabTraps.serialize() );
+				this.toast( zh ? `捕蟹笼 #${ readyList[ 0 ].id } 浮标闪金光！开船靠近按 K 收笼` : `Crab trap #${ readyList[ 0 ].id } is ready! Sail close & press K`, 3800 );
+
+			}
+
+		}
+
+		if ( this.diveTreasures ) {
+
+			this.diveTreasures.update( dt );
+			if ( p && p.mode === 'swim' && p.wasUnder ) {
+
+				const found = checkTreasureCollect( p.position, this.state.treasures, 3.6 );
+				if ( found ) {
+
+					const isNew = this.state.recordTreasure( found.id, found.reward );
+					if ( isNew ) {
+
+						this.diveTreasures.syncCollected( this.state.treasures );
+						app.audio?.uiChime?.( 'treasure' );
+						const title = zh ? found.nameZh : found.nameEn;
+						this.toast( zh ? `潜水发现海底秘宝「${ title }」！奖励 $${ found.reward }` : `Recovered sunken ${ title }! +$${ found.reward }`, 4200 );
+
+					}
+
+				}
+
+			}
+
+		}
 
 		this._exploreT += dt;
 		if ( this._exploreT >= 0.45 && p ) {
@@ -678,6 +806,27 @@ export class Game {
 				app.audio?.uiChime?.( 'reward' );
 				const title = zh ? lm.nameZh : lm.nameEn;
 				this.toast( zh ? `发现风景打卡点「${ title }」· 奖励 $${ lm.reward }` : `Discovered ${ title } · +$${ lm.reward }`, 3600 );
+
+			}
+
+		}
+
+		this._achCheckT += dt;
+		if ( this._achCheckT >= 1.2 ) {
+
+			this._achCheckT = 0;
+			const res = evaluateAchievements( this.state );
+			for ( const ach of res.list ) {
+
+				if ( ach.done && ! this._unlockedAch.has( ach.id ) ) {
+
+					this._unlockedAch.add( ach.id );
+					app.audio?.uiChime?.( 'reward' );
+					const an = zh ? ach.nameZh : ach.nameEn;
+					const tn = zh ? ach.titleZh : ach.titleEn;
+					this.toast( zh ? `解锁成就「${ an }」！获得联机称号「${ tn }」` : `Achievement unlocked: ${ an }! Title: ${ tn }`, 4400 );
+
+				}
 
 			}
 
@@ -697,6 +846,7 @@ export class Game {
 				} else if ( ev.gateHit ) {
 
 					app.audio?.uiChime?.( 'checkpoint' );
+					app.mp?.reportRallyProgress?.( ev.gateIndex, this.rally.elapsed );
 
 				} else if ( ev.finished ) {
 
@@ -704,6 +854,7 @@ export class Game {
 					const rec = this.state.recordRallyTime( vehicleId, elapsed );
 					this.state.addMoney( medal.reward );
 					app.audio?.uiChime?.( 'tourney' );
+					app.mp?.reportRallyFinish?.( elapsed, vehicleId );
 					const tierZh = { gold: '金牌', silver: '银牌', bronze: '铜牌', finish: '完赛' }[ medal.tier ] || '完赛';
 					const tierEn = medal.tier.toUpperCase();
 					const msg = zh

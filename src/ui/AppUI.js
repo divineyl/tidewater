@@ -4,6 +4,7 @@ import { G } from '../core/Globals.js';
 import { GroundBounce } from '../materials/GroundBounce.js';
 import { WEATHER_PRESETS, WEATHER_ORDER } from '../weather/WeatherSystem.js';
 import { UPGRADES, BOAT_PAINTS, BOAT_PAINT_IDS } from '../game/Gear.js';
+import { getTitleLabel } from '../game/Achievements.js';
 import { GPU } from '../engine/gpu/GPU.js';
 import { getLang, setLang, onLangChange, tr, trWeather, trUpgradeLabel } from '../i18n/i18n.js';
 
@@ -80,6 +81,7 @@ export class AppUI {
 			boatPaint: app.boat ? app.boat.paintId : ( app.prefs?.data.boatPaint ?? 'classic' ),
 			boatName: app.prefs?.data.boatName ?? '',
 			islandRadio: app.prefs?.data.islandRadio ?? false,
+			fpsCap: app.prefs?.data.fpsCap ?? 0,
 		};
 
 		ui.onPhotoMode = ( on ) => app.onPhotoModeChange( on );
@@ -496,6 +498,7 @@ export class AppUI {
 						if ( raw === null ) return;
 						const clean = raw.trim().slice( 0, 18 );
 						s.boatName = clean;
+						app.boat.setBoatName?.( clean );
 						if ( app.prefs ) app.prefs.save( { boatName: clean } );
 						ui.refresh();
 						ui.toast( clean ? `${ tr( 'Boat renamed' ) }: ${ clean }` : tr( 'Boat name cleared' ) );
@@ -561,6 +564,7 @@ export class AppUI {
 			s.cloudQuality = app.cloudQuality;
 			s.causticsOn = app.causticsEnabled;
 			s.autoFps = !! app.autoFps;
+			s.fpsCap = app.engine?.fpsCap ?? 0;
 			if ( app.caustics ) s.caustics = app.caustics.strength.value;
 			ui.setQualityPreset( app.qualityPreset );
 			ui.refresh();
@@ -607,6 +611,22 @@ export class AppUI {
 				app.autoFps = !! v;
 				if ( ! app.autoFps ) app.setRenderScale( app._targetRenderScale );
 				if ( app.prefs ) app.prefs.save( { autoFps: app.autoFps } );
+
+			},
+		} );
+		quality.addSelect( {
+			label: 'FPS cap', object: s, key: 'fpsCap',
+			tooltip: 'Limit max frame rate to 30 or 60 fps on laptops to keep temperatures low and prevent thermal throttling.',
+			options: [
+				{ label: 'Unlimited', value: 0 },
+				{ label: '60 fps', value: 60 },
+				{ label: '30 fps', value: 30 },
+			],
+			onChange: ( v ) => {
+
+				const cap = Number( v ) || 0;
+				app.setFpsCap?.( cap );
+				if ( app.prefs ) app.prefs.save( { fpsCap: cap } );
 
 			},
 		} );
@@ -740,6 +760,7 @@ export class AppUI {
 			if ( app.boat ) s.boatPaint = app.boat.paintId;
 			s.boatName = app.prefs?.data.boatName ?? '';
 			s.islandRadio = app.prefs?.data.islandRadio ?? false;
+			s.fpsCap = app.engine?.fpsCap ?? ( app.prefs?.data.fpsCap ?? 0 );
 
 			if ( app.weather ) {
 
@@ -955,17 +976,24 @@ export class AppUI {
 					const cardRoom = document.createElement( 'div' );
 					cardRoom.className = 'tw-mp-card';
 					const roleLbl = sum.role === 'host' ? ( zh ? '房主' : 'Host' ) : ( zh ? '访客' : 'Guest' );
+					const pingBadge = Number.isFinite( sum.pingMs ) ? ` · ${ sum.pingMs } ms` : '';
 					const addrs = ( sum.addresses && sum.addresses.length ) ? sum.addresses : [ sum.roomCode ];
+					const titleBadge = ( tid ) => {
+
+						const tl = getTitleLabel( tid, zh ? 'zh' : 'en' );
+						return tl ? `<small style="color:var(--tw-aqua);margin-left:3px">[${ esc( tl ) }]</small>` : '';
+
+					};
 					cardRoom.innerHTML = `
-						<div class="tw-mp-lbl">${ roleLbl } · ${ zh ? `共 ${ sum.peerCount + 1 } 人在岛上` : `${ sum.peerCount + 1 } in room` }</div>
+						<div class="tw-mp-lbl">${ roleLbl } · ${ zh ? `共 ${ sum.peerCount + 1 } 人在岛上` : `${ sum.peerCount + 1 } in room` }${ esc( pingBadge ) }</div>
 						<div class="tw-mp-code">
 							<span>${ esc( sum.roomCode ) }</span>
 							<button type="button" class="tw-mp-btn is-ghost" data-copy>${ tr( 'Copy' ) }</button>
 						</div>
 						${ addrs.length > 1 ? `<div class="tw-mp-status">${ zh ? '可用局域网 / 虚拟局域网地址：' : 'Available addresses: ' }${ esc( addrs.join( ' · ' ) ) }</div>` : '' }
 						<div class="tw-mp-peers">
-							<span class="tw-mp-peer"><i style="background:${ esc( mp.selfColor ) }"></i>${ esc( sum.nickname ) } (${ zh ? '你' : 'You' })</span>
-							${ sum.peers.map( ( p ) => `<span class="tw-mp-peer"><i style="background:${ esc( p.color ) }"></i>${ esc( p.name ) }</span>` ).join( '' ) }
+							<span class="tw-mp-peer"><i style="background:${ esc( mp.selfColor ) }"></i>${ esc( sum.nickname ) }${ titleBadge( sum.title ) } (${ zh ? '你' : 'You' })</span>
+							${ sum.peers.map( ( p ) => `<span class="tw-mp-peer"><i style="background:${ esc( p.color ) }"></i>${ esc( p.name ) }${ titleBadge( p.title ) }</span>` ).join( '' ) }
 						</div>
 						<div class="tw-mp-row">
 							<button type="button" class="tw-mp-btn" data-share-wp>${ tr( 'Share waypoint' ) }</button>
@@ -975,6 +1003,19 @@ export class AppUI {
 					cardRoom.querySelector( '[data-share-wp]' ).addEventListener( 'click', () => mp.shareWaypoint() );
 					cardRoom.querySelector( '[data-leave]' ).addEventListener( 'click', () => mp.disconnect() );
 					box.append( cardRoom );
+
+					if ( sum.role === 'host' ) {
+
+						const cardRace = document.createElement( 'div' );
+						cardRace.className = 'tw-mp-card';
+						cardRace.innerHTML = `
+							<div class="tw-mp-lbl">🏁 ${ tr( 'East Headland MP Rally' ) }</div>
+							<div class="tw-mp-status">${ zh ? '所有在线好友倒计时 3 秒同步发车飙东岬山路！' : 'Synchronized 3s countdown race along East Headland!' }</div>
+							<button type="button" class="tw-mp-btn" data-start-mp-rally>${ tr( 'Start MP Rally' ) }</button>`;
+						cardRace.querySelector( '[data-start-mp-rally]' ).addEventListener( 'click', () => mp.startMultiplayerRally( 3 ) );
+						box.append( cardRace );
+
+					}
 
 					const tSum = mp.getTournamentSummary?.();
 					const cardTourney = document.createElement( 'div' );
@@ -1034,10 +1075,43 @@ export class AppUI {
 
 				}
 
-				// 3. Concise tip card
+				// 3. Concise tip + Custom TURN relay card
 				const cardTip = document.createElement( 'div' );
 				cardTip.className = 'tw-mp-card';
-				cardTip.innerHTML = `<div class="tw-mp-status">${ tr( 'P2P uses a 4-char room code without buying servers (works on Web & Desktop). If strict NAT blocks connection, switch to LAN mode with same Wi-Fi or Tailscale/ZeroTier.' ) }</div>`;
+				cardTip.innerHTML = `
+					<div class="tw-mp-status">${ tr( 'P2P uses a 4-char room code without buying servers (works on Web & Desktop). If strict NAT blocks connection, switch to LAN mode with same Wi-Fi or Tailscale/ZeroTier.' ) }</div>
+					<details style="margin-top:6px">
+						<summary class="tw-mp-lbl" style="cursor:pointer">${ tr( 'Custom TURN relay (Advanced)' ) }</summary>
+						<div style="display:flex;flex-direction:column;gap:5px;margin-top:6px">
+							<input type="text" class="tw-mp-input" maxlength="120" data-turn-url placeholder="turn:relay.example.com:3478" />
+							<div class="tw-mp-row">
+								<input type="text" class="tw-mp-input" maxlength="64" data-turn-user placeholder="${ zh ? 'TURN 用户名' : 'TURN username' }" />
+								<input type="password" class="tw-mp-input" maxlength="64" data-turn-cred placeholder="${ zh ? 'TURN 密码' : 'Credential' }" />
+							</div>
+						</div>
+					</details>`;
+				const tu = cardTip.querySelector( '[data-turn-url]' );
+				const tus = cardTip.querySelector( '[data-turn-user]' );
+				const tcr = cardTip.querySelector( '[data-turn-cred]' );
+				if ( tu && tus && tcr ) {
+
+					tu.value = app.prefs?.data?.customTurnUrl || '';
+					tus.value = app.prefs?.data?.customTurnUser || '';
+					tcr.value = app.prefs?.data?.customTurnCred || '';
+					const saveTurn = () => app.prefs?.save?.( {
+						customTurnUrl: tu.value,
+						customTurnUser: tus.value,
+						customTurnCred: tcr.value,
+					} );
+					for ( const inp of [ tu, tus, tcr ] ) {
+
+						inp.addEventListener( 'keydown', ( e ) => e.stopPropagation() );
+						inp.addEventListener( 'change', saveTurn );
+
+					}
+
+				}
+
 				box.append( cardTip );
 
 			};
@@ -1049,9 +1123,11 @@ export class AppUI {
 				if ( ui._panelOpen && ui.activeTab?.id === 'multiplayer' ) renderMp();
 
 			};
+			mp.onRallyRaceChange = ( sum ) => ui.setRallyRaceState( sum );
 			mp.onChat = ( entry ) => ui.pushChatMessage( entry );
 			ui.onChatSend = ( text ) => mp.sendChat( text );
 			ui.onEmoteSend = ( kind ) => mp.sendEmote( kind );
+			ui.onQuickChat = ( id ) => mp.sendQuickChat( id );
 			onLangChange( () => {
 
 				ui.setTournamentState( mp.getTournamentSummary?.() );

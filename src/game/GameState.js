@@ -26,6 +26,9 @@ export class GameState {
 		this.bountiesDone = 0;
 		this.landmarks = {}; // id -> { visited: true, photo: boolean }
 		this.rallyBest = { motorcycle: null, buggy: null };
+		this.crabTraps = [];
+		this.trapsHauled = 0;
+		this.treasures = {};
 		this._nextId = 1;
 		this.listeners = new Set();
 
@@ -258,6 +261,36 @@ export class GameState {
 
 	}
 
+	recordTreasure( id, reward = 0 ) {
+
+		if ( ! id || typeof id !== 'string' || UNSAFE_KEYS.has( id ) ) return false;
+		if ( hasOwn( this.treasures, id ) && this.treasures[ id ] ) return false;
+		this.treasures[ id ] = true;
+		if ( Number.isFinite( reward ) && reward > 0 ) this.money += Math.round( reward );
+		this.save();
+		this.emit();
+		return true;
+
+	}
+
+	recordTrapHaul( totalValue = 0 ) {
+
+		this.trapsHauled ++;
+		if ( Number.isFinite( totalValue ) && totalValue > 0 ) this.money += Math.round( totalValue );
+		this.save();
+		this.emit();
+		return this.trapsHauled;
+
+	}
+
+	setCrabTraps( list ) {
+
+		this.crabTraps = Array.isArray( list ) ? list.slice( 0, 4 ) : [];
+		this.save();
+		this.emit();
+
+	}
+
 	toJSON() {
 
 		return {
@@ -272,6 +305,9 @@ export class GameState {
 			bountiesDone: this.bountiesDone,
 			landmarks: this.landmarks,
 			rallyBest: this.rallyBest,
+			crabTraps: this.crabTraps,
+			trapsHauled: this.trapsHauled,
+			treasures: this.treasures,
 			nextId: this._nextId,
 		};
 
@@ -363,6 +399,42 @@ export class GameState {
 			motorcycle: Number.isFinite( rb.motorcycle ) && rb.motorcycle > 0 ? rb.motorcycle : null,
 			buggy: Number.isFinite( rb.buggy ) && rb.buggy > 0 ? rb.buggy : null,
 		};
+
+		const trapsOut = [];
+		if ( Array.isArray( d.crabTraps ) ) {
+
+			for ( const t of d.crabTraps.slice( 0, 4 ) ) {
+
+				if ( ! t || ! Number.isFinite( t.x ) || ! Number.isFinite( t.z ) ) continue;
+				if ( Math.abs( t.x ) > 1000 || Math.abs( t.z ) > 1000 ) continue;
+				trapsOut.push( {
+					id: Number.isInteger( t.id ) && t.id >= 1 ? t.id : trapsOut.length + 1,
+					x: t.x,
+					z: t.z,
+					depth: Number.isFinite( t.depth ) && t.depth >= 2 ? t.depth : 6,
+					reefDist: Number.isFinite( t.reefDist ) ? t.reefDist : 40,
+					soakSec: Number.isFinite( t.soakSec ) && t.soakSec >= 0 ? t.soakSec : 0,
+					ready: !! t.ready,
+				} );
+
+			}
+
+		}
+
+		this.crabTraps = trapsOut;
+		this.trapsHauled = Math.max( 0, Number.isFinite( d.trapsHauled ) ? ( d.trapsHauled | 0 ) : 0 );
+		this.treasures = {};
+		if ( d.treasures && typeof d.treasures === 'object' ) {
+
+			for ( const [ tk, tv ] of Object.entries( d.treasures ) ) {
+
+				if ( ! tk || UNSAFE_KEYS.has( tk ) ) continue;
+				if ( tv ) this.treasures[ tk ] = true;
+
+			}
+
+		}
+
 		const savedNext = Number.isFinite( d.nextId ) && d.nextId >= 1 ? ( d.nextId | 0 ) : 1;
 		this._nextId = Math.max( savedNext, maxId + 1, 1 );
 		return true;
@@ -408,6 +480,9 @@ export class GameState {
 		this.bountiesDone = 0;
 		this.landmarks = {};
 		this.rallyBest = { motorcycle: null, buggy: null };
+		this.crabTraps = [];
+		this.trapsHauled = 0;
+		this.treasures = {};
 		this.save();
 		this.emit();
 

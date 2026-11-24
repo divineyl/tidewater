@@ -499,6 +499,15 @@ export const ZH = {
 	'Horn / Wave emote': '载具或渔船鸣笛 · 步行时挥手打招呼',
 	'Start East Headland rally (in vehicle)': '在陆地载具上快速开始/重开东岬越野计时赛',
 	'Island Journal (Bounties / Lures / Rally)': '打开海岛手账（悬赏 / 拟饵鱼王 / 打卡 / 计时赛）',
+	'FPS cap': '帧率上限',
+	'Limit max frame rate to 30 or 60 fps on laptops to keep temperatures low and prevent thermal throttling.': '在轻薄本或核显设备上限制为 30/60 帧可降低发热降频，让运行更平稳安静。',
+	'Unlimited': '不限制',
+	'60 fps': '60 fps',
+	'30 fps': '30 fps',
+	'Haul crab trap!': '收起捕蟹笼（长收获！）',
+	'East Headland MP Rally': '东岬联机同步越野赛',
+	'Start MP Rally': '发起全房同步发车赛',
+	'Custom TURN relay (Advanced)': '自定义 TURN 中继服务器（高级穿透）',
 };
 
 export const ZH_WEATHER = {

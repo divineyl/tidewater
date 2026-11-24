@@ -1,7 +1,7 @@
 {
   "name": "tidewater-desktop",
   "productName": "Tidewater",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "description": "Tidewater standalone desktop edition",
   "private": true,
   "main": "main.cjs",

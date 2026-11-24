@@ -1,9 +1,11 @@
-import { Group, MathUtils, Mesh, Object3D, Quaternion, Vector3 } from '../engine/index.js';
+import { Group, MathUtils, Mesh, Object3D, PlaneGeometry, Quaternion, Vector3 } from '../engine/index.js';
+import { Texture } from '../engine/gpu/Texture.js';
 import { G } from '../engine/render/Frame.js';
 import { HullLines, RHO_SEAWATER } from './boat/HullLines.js';
 import { GeoKit, triangleCount } from './boat/GeoKit.js';
 import { BoatMaterials } from './boat/BoatMaterials.js';
 import { BOAT_PAINTS } from '../game/Gear.js';
+import { standard } from '../materials/Materials.js';
 import { buildHull, buildHullVolume, keelVolume, houseHalfWidth, KEEL } from './boat/HullBuilder.js';
 import { buildWheelhouse, wheelGeometry, throttleGeometry, radarArrayGeometry, HOUSE, roofTopY } from './boat/Wheelhouse.js';
 import { buildDeckGear, TRAPS, TRAP, HAULER } from './boat/DeckGear.js';
@@ -177,6 +179,8 @@ export class BoatModel {
 
 		this.hullSamples = lines.buildHullSamples( 8 );
 		this.colliders = this._buildColliders();
+		this.boatName = '';
+		this._initNameplate( lines );
 
 		// ---- state
 
@@ -383,14 +387,124 @@ export class BoatModel {
 
 	}
 
+	_initNameplate( lines ) {
+
+		this._nameTex = new Texture( {
+			width: 512, height: 128, format: 'rgba8unorm',
+			usage: [ 'sample', 'copyDst' ], sampler: 'linearClamp', label: 'boatNameplate',
+		} );
+		this._nameCanvas = typeof document !== 'undefined' ? document.createElement( 'canvas' ) : null;
+		if ( this._nameCanvas ) {
+
+			this._nameCanvas.width = 512;
+			this._nameCanvas.height = 128;
+
+		}
+
+		const mat = standard( {
+			textures: { nameTex: this._nameTex },
+			transparent: true,
+			depthWrite: false,
+			roughness: 0.28,
+			metalness: 0.05,
+			surface: /* wgsl */`
+				let t = textureSample( nameTex, smpLinearClamp, vec2f( in.uv.x, 1.0 - in.uv.y ) );
+				if ( t.a < 0.08 ) { discard; }
+				s.albedo = t.rgb;
+				s.alpha = t.a;
+			`,
+		} );
+		const mesh = this.nameplateMesh = new Mesh( new PlaneGeometry( 1.54, 0.36 ), mat );
+		mesh.name = 'boat-nameplate';
+		mesh.position.set( 0, 0.72, lines.zAft - 0.018 );
+		mesh.rotation.y = Math.PI;
+		mesh.castShadow = false;
+		mesh.receiveShadow = false;
+		mesh.visible = false;
+		mesh.renderOrder = 2;
+		this.group.add( mesh );
+
+	}
+
+	setBoatName( rawName ) {
+
+		const clean = typeof rawName === 'string'
+			? rawName.replace( /[\x00-\x1f\x7f]/g, ' ' ).trim().slice( 0, 18 )
+			: '';
+		this.boatName = clean;
+		if ( ! this.nameplateMesh ) return clean;
+		if ( ! clean ) {
+
+			this.nameplateMesh.visible = false;
+			return clean;
+
+		}
+
+		if ( this._nameCanvas && this._nameTex ) {
+
+			paintNameplateCanvas( this._nameCanvas, clean, this.paintId );
+			const ctx = this._nameCanvas.getContext( '2d' );
+			if ( ctx ) this._nameTex.upload( ctx.getImageData( 0, 0, 512, 128 ).data );
+
+		}
+
+		this.nameplateMesh.visible = true;
+		return clean;
+
+	}
+
 	setPaint( id ) {
 
 		const key = typeof id === 'string' && Object.prototype.hasOwnProperty.call( BOAT_PAINTS, id ) ? id : 'classic';
 		this.paintId = key;
 		const spec = BOAT_PAINTS[ key ];
 		this.materials.setHullPaint( spec.topside, spec.stripe );
+		if ( this.boatName ) this.setBoatName( this.boatName );
 		return key;
 
 	}
+
+}
+
+const DARK_PAINTS = new Set( [ 'navy', 'emerald', 'midnight' ] );
+
+export function paintNameplateCanvas( canvas, text, paintId = 'classic' ) {
+
+	const ctx = canvas?.getContext?.( '2d' );
+	if ( ! ctx ) return;
+	const w = canvas.width || 512;
+	const h = canvas.height || 128;
+	ctx.clearRect( 0, 0, w, h );
+
+	const darkHull = DARK_PAINTS.has( paintId );
+	const ink = darkHull ? '#f6ebd2' : '#13243b';
+	const accent = darkHull ? 'rgba(246, 235, 210, 0.55)' : 'rgba(19, 36, 59, 0.45)';
+	const shadow = darkHull ? 'rgba(8, 16, 28, 0.72)' : 'rgba(255, 255, 255, 0.35)';
+
+	ctx.textAlign = 'center';
+	ctx.textBaseline = 'middle';
+	let fontSize = 54;
+	do {
+
+		ctx.font = `700 ${ fontSize }px Georgia, "Microsoft YaHei", "PingFang SC", serif`;
+		if ( ctx.measureText( text ).width <= w * 0.84 || fontSize <= 26 ) break;
+		fontSize -= 4;
+
+	} while ( fontSize >= 26 );
+
+	ctx.strokeStyle = accent;
+	ctx.lineWidth = 3;
+	ctx.beginPath();
+	ctx.moveTo( w * 0.14, h * 0.22 );
+	ctx.lineTo( w * 0.86, h * 0.22 );
+	ctx.moveTo( w * 0.14, h * 0.78 );
+	ctx.lineTo( w * 0.86, h * 0.78 );
+	ctx.stroke();
+
+	ctx.lineWidth = 5;
+	ctx.strokeStyle = shadow;
+	ctx.strokeText( text, w * 0.5, h * 0.51 );
+	ctx.fillStyle = ink;
+	ctx.fillText( text, w * 0.5, h * 0.51 );
 
 }
