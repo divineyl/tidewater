@@ -385,7 +385,7 @@ export class BoatModel {
 
 	setPaint( id ) {
 
-		const key = BOAT_PAINTS[ id ] ? id : 'classic';
+		const key = typeof id === 'string' && Object.prototype.hasOwnProperty.call( BOAT_PAINTS, id ) ? id : 'classic';
 		this.paintId = key;
 		const spec = BOAT_PAINTS[ key ];
 		this.materials.setHullPaint( spec.topside, spec.stripe );

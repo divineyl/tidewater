@@ -117,6 +117,7 @@ function createLanServer( { port = 5195, host = '0.0.0.0' } = {} ) {
 			socket,
 			buf: Buffer.alloc( 0 ),
 			fragChunks: [],
+			fragBytes: 0,
 			fragOpcode: 0,
 			peerId: null,
 		};
@@ -135,6 +136,13 @@ function createLanServer( { port = 5195, host = '0.0.0.0' } = {} ) {
 		};
 
 		socket.on( 'data', ( chunk ) => {
+
+			if ( client.buf.length + chunk.length > MAX_PAYLOAD_BYTES * 2 ) {
+
+				socket.destroy();
+				return;
+
+			}
 
 			client.buf = Buffer.concat( [ client.buf, chunk ] );
 			while ( client.buf.length >= 2 ) {
@@ -226,10 +234,25 @@ function createLanServer( { port = 5195, host = '0.0.0.0' } = {} ) {
 
 						client.fragOpcode = opcode;
 						client.fragChunks = [ payload ];
+						client.fragBytes = payload.length;
+						if ( client.fragBytes > MAX_PAYLOAD_BYTES ) {
+
+							socket.destroy();
+							return;
+
+						}
 
 					}
 
 				} else if ( opcode === 0x0 && client.fragChunks.length > 0 ) {
+
+					client.fragBytes += payload.length;
+					if ( client.fragBytes > MAX_PAYLOAD_BYTES ) {
+
+						socket.destroy();
+						return;
+
+					}
 
 					client.fragChunks.push( payload );
 					if ( fin ) {
@@ -237,12 +260,20 @@ function createLanServer( { port = 5195, host = '0.0.0.0' } = {} ) {
 						const full = Buffer.concat( client.fragChunks );
 						const origOp = client.fragOpcode;
 						client.fragChunks = [];
+						client.fragBytes = 0;
 						client.fragOpcode = 0;
 						if ( origOp === 0x1 ) handleTextMessage( client, full.toString( 'utf8' ) );
 
 					}
 
 				}
+
+			}
+
+			if ( client.buf.length > MAX_PAYLOAD_BYTES + 16 ) {
+
+				socket.destroy();
+				return;
 
 			}
 
@@ -260,13 +291,13 @@ function createLanServer( { port = 5195, host = '0.0.0.0' } = {} ) {
 			const parsed = JSON.parse( text );
 			if ( parsed && parsed.from && ! client.peerId ) {
 
-				client.peerId = String( parsed.from ).slice( 0, 32 );
+				client.peerId = String( parsed.from ).slice( 0, 36 );
 
 			}
 
 			if ( parsed && parsed.to ) {
 
-				const target = String( parsed.to );
+				const target = String( parsed.to ).slice( 0, 36 );
 				for ( const c of clients ) {
 
 					if ( c !== client && c.peerId === target ) {
@@ -277,6 +308,8 @@ function createLanServer( { port = 5195, host = '0.0.0.0' } = {} ) {
 					}
 
 				}
+
+				return; // Drop targeted messages when recipient is missing rather than leaking to all peers.
 
 			}
 

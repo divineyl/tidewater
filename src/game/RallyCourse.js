@@ -24,7 +24,8 @@ export const RALLY_MEDALS = Object.freeze( {
 
 export function evaluateRallyMedal( elapsedSec ) {
 
-	const t = Number( elapsedSec ) || 999;
+	const raw = Number( elapsedSec );
+	const t = Number.isFinite( raw ) && raw >= 0 ? raw : 999;
 	if ( t <= RALLY_MEDALS.gold.sec ) return { tier: 'gold', reward: RALLY_MEDALS.gold.reward };
 	if ( t <= RALLY_MEDALS.silver.sec ) return { tier: 'silver', reward: RALLY_MEDALS.silver.reward };
 	if ( t <= RALLY_MEDALS.bronze.sec ) return { tier: 'bronze', reward: RALLY_MEDALS.bronze.reward };
@@ -161,7 +162,8 @@ export class RallyCourse {
 
 	update( dt, player, vehicle ) {
 
-		if ( this._idleCooldown > 0 ) this._idleCooldown = Math.max( 0, this._idleCooldown - dt );
+		const step = Number.isFinite( dt ) && dt > 0 ? Math.min( dt, 0.25 ) : 0;
+		if ( this._idleCooldown > 0 ) this._idleCooldown = Math.max( 0, this._idleCooldown - step );
 
 		const riding = player && player.mode === 'vehicle' && vehicle;
 		if ( ! this.active ) {
@@ -190,7 +192,7 @@ export class RallyCourse {
 
 		}
 
-		this.elapsed += dt;
+		this.elapsed += step;
 		const gate = RALLY_GATES[ this.gateIndex ];
 		if ( ! gate ) return null;
 

@@ -191,6 +191,7 @@ export function sanitizeMessage( raw ) {
 					} ) ).filter( ( p ) => p.id )
 					: [],
 				world: obj.world && typeof obj.world === 'object' ? sanitizeWorldPayload( obj.world ) : null,
+				tournament: obj.tournament && typeof obj.tournament === 'object' ? sanitizeTournamentSnapshot( obj.tournament ) : null,
 			};
 
 		case 'peer_join':
@@ -320,6 +321,35 @@ function sanitizeWorldPayload( obj ) {
 		weatherPreset: cleanStr( obj.weatherPreset, 'fair', 24 ),
 		windSpeed: num( obj.windSpeed, 7, 0, 35 ),
 		windDir: num( obj.windDir, 20, - 360, 360 ),
+	};
+
+}
+
+function sanitizeTournamentSnapshot( obj ) {
+
+	const id = cleanStr( obj.id, '', 36 );
+	if ( ! id ) return null;
+	const durationSec = num( obj.durationSec, 300, 30, 1800 );
+	const remainingSec = num( obj.remainingSec, 0, 0, durationSec );
+	if ( remainingSec <= 0 ) return null;
+	const rows = Array.isArray( obj.rows )
+		? obj.rows.slice( 0, 16 ).map( ( r ) => ( {
+			id: cleanStr( r?.id, '', 36 ),
+			name: sanitizeName( r?.name ),
+			color: /^#[0-9a-fA-F]{6}$/.test( r?.color || '' ) ? r.color : PLAYER_COLORS[ 0 ],
+			totalKg: num( r?.totalKg, 0, 0, 1e6 ),
+			biggestKg: num( r?.biggestKg, 0, 0, 5000 ),
+			catchCount: Math.max( 0, Math.min( 10000, num( r?.catchCount, 0, 0, 10000 ) | 0 ) ),
+			species: Array.isArray( r?.species ) ? r.species.slice( 0, 32 ).map( ( sp ) => cleanStr( sp, '', 32 ) ).filter( Boolean ) : [],
+		} ) ).filter( ( r ) => r.id )
+		: [];
+	return {
+		id,
+		mode: ALLOWED_TOURNEY_MODES.has( obj.mode ) ? obj.mode : 'totalKg',
+		durationSec,
+		remainingSec,
+		active: true,
+		rows,
 	};
 
 }

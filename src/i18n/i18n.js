@@ -784,27 +784,29 @@ export function onLangChange( fn ) {
 
 }
 
+const hasOwn = ( o, k ) => typeof k === 'string' && Object.prototype.hasOwnProperty.call( o, k );
+
 export function tr( enText, zhOverride ) {
 
 	if ( enText == null ) return '';
 	const s = String( enText );
 	if ( currentLang !== 'zh' ) return s;
 	if ( zhOverride !== undefined ) return zhOverride;
-	return Object.prototype.hasOwnProperty.call( ZH, s ) ? ZH[ s ] : s;
+	return hasOwn( ZH, s ) ? ZH[ s ] : s;
 
 }
 
 export function trWeather( id, fallback ) {
 
 	if ( currentLang !== 'zh' ) return fallback || id;
-	return ZH_WEATHER[ id ] || tr( fallback || id );
+	return hasOwn( ZH_WEATHER, id ) ? ZH_WEATHER[ id ] : tr( fallback || id );
 
 }
 
 export function trFish( id, fallback ) {
 
 	if ( currentLang !== 'zh' ) return fallback || id;
-	return ZH_FISH[ id ] || fallback || id;
+	return hasOwn( ZH_FISH, id ) ? ZH_FISH[ id ] : ( fallback || id );
 
 }
 
@@ -813,35 +815,36 @@ export function trSurface( name ) {
 	if ( ! name ) return currentLang === 'zh' ? '沙滩' : 'Sand';
 	const low = String( name ).toLowerCase();
 	if ( currentLang !== 'zh' ) return low.charAt( 0 ).toUpperCase() + low.slice( 1 );
-	return ZH_SURFACE[ low ] || name;
+	return hasOwn( ZH_SURFACE, low ) ? ZH_SURFACE[ low ] : name;
 
 }
 
 export function trPhase( enPhase ) {
 
 	if ( currentLang !== 'zh' ) return enPhase;
-	return ZH_PHASE[ enPhase ] || enPhase;
+	return hasOwn( ZH_PHASE, enPhase ) ? ZH_PHASE[ enPhase ] : enPhase;
 
 }
 
 export function trCompass( enWord ) {
 
 	if ( currentLang !== 'zh' ) return enWord;
-	return ZH_COMPASS[ enWord ] || enWord;
+	return hasOwn( ZH_COMPASS, enWord ) ? ZH_COMPASS[ enWord ] : enWord;
 
 }
 
 export function trUpgradeName( key, fallback ) {
 
 	if ( currentLang !== 'zh' ) return fallback;
-	return ZH_UPGRADES[ key ]?.name || fallback;
+	return hasOwn( ZH_UPGRADES, key ) && ZH_UPGRADES[ key ]?.name ? ZH_UPGRADES[ key ].name : fallback;
 
 }
 
 export function trUpgradeLabel( key, index, fallback ) {
 
 	if ( currentLang !== 'zh' ) return fallback;
-	return ZH_UPGRADES[ key ]?.levels?.[ index ] || fallback;
+	const idx = Number.isInteger( index ) && index >= 0 ? index : - 1;
+	return hasOwn( ZH_UPGRADES, key ) && idx >= 0 ? ( ZH_UPGRADES[ key ]?.levels?.[ idx ] || fallback ) : fallback;
 
 }
 

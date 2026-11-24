@@ -322,7 +322,7 @@ export class Game {
 
 		} else if ( this.landing || this.display.shown ) this.endLanding();
 
-		p.busy = rod.lineInWater || rod.state === 'windup';
+		p.busy = rod.lineInWater || rod.state === 'windup' || rod.state === 'landing' || Boolean( this.landing );
 
 		this.updateBoat( dt );
 		this.updateExploration( dt );

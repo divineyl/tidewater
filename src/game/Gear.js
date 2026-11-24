@@ -86,11 +86,15 @@ export function fuelBurn( rpm ) {
 
 }
 
+const hasOwn = ( obj, k ) => typeof k === 'string' && Object.prototype.hasOwnProperty.call( obj, k );
+
 // next level of a track, or null when maxed
 export function nextLevel( upgrades, key ) {
 
+	if ( ! hasOwn( UPGRADES, key ) ) return null;
 	const lv = UPGRADES[ key ].levels;
-	const i = ( upgrades[ key ] | 0 ) + 1;
+	const cur = Math.max( 0, Math.min( lv.length - 1, upgrades?.[ key ] | 0 ) );
+	const i = cur + 1;
 	return i < lv.length ? { index: i, ...lv[ i ] } : null;
 
 }
@@ -110,7 +114,7 @@ export function gearStats( upgrades ) {
 	for ( const k in UPGRADES ) {
 
 		const lv = UPGRADES[ k ].levels;
-		const i = Math.max( 0, Math.min( lv.length - 1, upgrades[ k ] | 0 ) );
+		const i = Math.max( 0, Math.min( lv.length - 1, upgrades?.[ k ] | 0 ) );
 		for ( const [ key, v ] of Object.entries( lv[ i ] ) ) if ( key !== 'cost' && key !== 'label' ) s[ key ] = v;
 
 	}

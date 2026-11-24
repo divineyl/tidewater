@@ -21,6 +21,8 @@ const PEER_ICE_CONFIG = {
 	],
 };
 
+const HOST_ONLY_TYPES = new Set( [ 'welcome', 'world', 'peer_join', 'peer_leave', 'tourney_start', 'tourney_end' ] );
+
 const _proj = new Vector3();
 const _camFwd = new Vector3();
 const _toPeer = new Vector3();
@@ -74,6 +76,8 @@ export class MultiplayerManager {
 		this._guestConn = null;
 		this._ws = null;
 		this._hostId = null;
+		this._connGen = 0;
+		this._connectTimer = null;
 
 		this._sendTimer = 0;
 		this._worldTimer = 0;
@@ -213,6 +217,7 @@ export class MultiplayerManager {
 
 	_tryOpenPeerHost( code, peerId ) {
 
+		const gen = this._connGen;
 		return new Promise( ( resolve ) => {
 
 			let settled = false;
@@ -230,21 +235,37 @@ export class MultiplayerManager {
 
 			this._peerJs = peer;
 
+			const cancelStale = () => {
+
+				settled = true;
+				clearTimeout( timer );
+				if ( this._connectTimer === timer ) this._connectTimer = null;
+				try { peer.destroy(); } catch { /* ignore */ }
+				if ( this._peerJs === peer ) this._peerJs = null;
+				resolve( { ok: false, error: 'Cancelled' } );
+
+			};
+
 			const timer = setTimeout( () => {
 
 				if ( settled ) return;
+				if ( gen !== this._connGen ) return cancelStale();
 				settled = true;
+				if ( this._connectTimer === timer ) this._connectTimer = null;
 				try { peer.destroy(); } catch { /* ignore */ }
 				if ( this._peerJs === peer ) this._peerJs = null;
 				resolve( { ok: false, error: tr( 'Signaling server timed out' ) } );
 
 			}, 12000 );
+			this._connectTimer = timer;
 
 			peer.once( 'open', () => {
 
 				if ( settled ) return;
+				if ( gen !== this._connGen ) return cancelStale();
 				settled = true;
 				clearTimeout( timer );
+				if ( this._connectTimer === timer ) this._connectTimer = null;
 				this.status = 'connected';
 				this.roomCode = code;
 				this.addresses = [];
@@ -257,6 +278,13 @@ export class MultiplayerManager {
 
 			peer.on( 'error', ( err ) => {
 
+				if ( gen !== this._connGen ) {
+
+					if ( ! settled ) cancelStale();
+					return;
+
+				}
+
 				const msg = err?.type === 'unavailable-id'
 					? 'Room ID collision'
 					: ( err?.message || tr( 'P2P connection error' ) );
@@ -264,6 +292,7 @@ export class MultiplayerManager {
 
 					settled = true;
 					clearTimeout( timer );
+					if ( this._connectTimer === timer ) this._connectTimer = null;
 					try { peer.destroy(); } catch { /* ignore */ }
 					if ( this._peerJs === peer ) this._peerJs = null;
 					resolve( { ok: false, retryable: err?.type === 'unavailable-id', error: msg } );
@@ -304,6 +333,7 @@ export class MultiplayerManager {
 					hostId: this.selfId,
 					peers: this._allMemberDescriptors(),
 					world: this._captureWorldSnapshot(),
+					tournament: this._captureTournamentSnapshot(),
 				};
 				try { conn.send( welcome ); } catch { /* ignore */ }
 
@@ -318,7 +348,15 @@ export class MultiplayerManager {
 
 			}
 
-			if ( ! remoteId && msg.from ) remoteId = msg.from;
+			if ( ! remoteId ) {
+
+				if ( msg.from && msg.from !== this.selfId ) remoteId = msg.from;
+				else return;
+
+			}
+
+			if ( HOST_ONLY_TYPES.has( msg.t ) ) return;
+			msg.from = remoteId;
 			this._handleIncomingMessage( msg );
 			this._broadcastP2P( msg, remoteId );
 
@@ -362,6 +400,7 @@ export class MultiplayerManager {
 		this._emitState();
 
 		const hostPeerId = roomCodeToPeerId( norm );
+		const gen = this._connGen;
 
 		return new Promise( ( resolve ) => {
 
@@ -383,11 +422,24 @@ export class MultiplayerManager {
 
 			this._peerJs = peer;
 
+			const cancelStale = () => {
+
+				settled = true;
+				clearTimeout( timer );
+				if ( this._connectTimer === timer ) this._connectTimer = null;
+				try { peer.destroy(); } catch { /* ignore */ }
+				if ( this._peerJs === peer ) this._peerJs = null;
+				resolve( { ok: false, error: 'Cancelled' } );
+
+			};
+
 			const fail = ( message ) => {
 
 				if ( settled ) return;
+				if ( gen !== this._connGen ) return cancelStale();
 				settled = true;
 				clearTimeout( timer );
+				if ( this._connectTimer === timer ) this._connectTimer = null;
 				this.status = 'error';
 				this.role = 'none';
 				this.errorMessage = message;
@@ -399,14 +451,17 @@ export class MultiplayerManager {
 			};
 
 			const timer = setTimeout( () => fail( tr( 'Room connection timed out' ) ), 12000 );
+			this._connectTimer = timer;
 
 			peer.once( 'open', () => {
 
+				if ( gen !== this._connGen ) return cancelStale();
 				const conn = peer.connect( hostPeerId, { reliable: true, serialization: 'json' } );
 				this._guestConn = conn;
 
 				conn.once( 'open', () => {
 
+					if ( gen !== this._connGen ) return cancelStale();
 					try {
 
 						conn.send( {
@@ -427,12 +482,14 @@ export class MultiplayerManager {
 
 				conn.on( 'data', ( raw ) => {
 
+					if ( gen !== this._connGen ) return;
 					const msg = sanitizeMessage( raw );
 					if ( ! msg ) return;
 					if ( msg.t === 'welcome' && ! settled ) {
 
 						settled = true;
 						clearTimeout( timer );
+						if ( this._connectTimer === timer ) this._connectTimer = null;
 						this.status = 'connected';
 						this._handleIncomingMessage( msg );
 						this._emitState();
@@ -446,6 +503,13 @@ export class MultiplayerManager {
 				} );
 
 				conn.on( 'close', () => {
+
+					if ( gen !== this._connGen ) {
+
+						if ( ! settled ) cancelStale();
+						return;
+
+					}
 
 					if ( ! settled ) {
 
@@ -557,6 +621,7 @@ export class MultiplayerManager {
 
 	_connectLanWebSocket( wsUrl, asHost ) {
 
+		const gen = this._connGen;
 		return new Promise( ( resolve ) => {
 
 			let settled = false;
@@ -582,11 +647,24 @@ export class MultiplayerManager {
 
 			this._ws = ws;
 
+			const cancelStale = () => {
+
+				settled = true;
+				clearTimeout( timer );
+				if ( this._connectTimer === timer ) this._connectTimer = null;
+				try { ws.close(); } catch { /* ignore */ }
+				if ( this._ws === ws ) this._ws = null;
+				resolve( { ok: false, error: 'Cancelled' } );
+
+			};
+
 			const fail = ( message ) => {
 
 				if ( settled ) return;
+				if ( gen !== this._connGen ) return cancelStale();
 				settled = true;
 				clearTimeout( timer );
+				if ( this._connectTimer === timer ) this._connectTimer = null;
 				try { ws.close(); } catch { /* ignore */ }
 				if ( this._ws === ws ) this._ws = null;
 				this.status = 'error';
@@ -598,9 +676,11 @@ export class MultiplayerManager {
 			};
 
 			const timer = setTimeout( () => fail( tr( 'LAN connection timed out' ) ), 10000 );
+			this._connectTimer = timer;
 
 			ws.addEventListener( 'open', () => {
 
+				if ( gen !== this._connGen ) return cancelStale();
 				try {
 
 					ws.send( JSON.stringify( {
@@ -622,6 +702,7 @@ export class MultiplayerManager {
 
 					settled = true;
 					clearTimeout( timer );
+					if ( this._connectTimer === timer ) this._connectTimer = null;
 					this.status = 'connected';
 					this._emitState();
 					resolve( { ok: true, roomCode: this.roomCode, addresses: this.addresses } );
@@ -632,6 +713,7 @@ export class MultiplayerManager {
 
 			ws.addEventListener( 'message', ( ev ) => {
 
+				if ( gen !== this._connGen ) return;
 				const msg = sanitizeMessage( ev.data );
 				if ( ! msg ) return;
 				if ( asHost && msg.t === 'hello' ) {
@@ -647,6 +729,7 @@ export class MultiplayerManager {
 						hostId: this.selfId,
 						peers: this._allMemberDescriptors(),
 						world: this._captureWorldSnapshot(),
+						tournament: this._captureTournamentSnapshot(),
 					} );
 					return;
 
@@ -656,6 +739,7 @@ export class MultiplayerManager {
 
 					settled = true;
 					clearTimeout( timer );
+					if ( this._connectTimer === timer ) this._connectTimer = null;
 					this.status = 'connected';
 					this._handleIncomingMessage( msg );
 					this._emitState();
@@ -670,6 +754,13 @@ export class MultiplayerManager {
 			} );
 
 			ws.addEventListener( 'close', () => {
+
+				if ( gen !== this._connGen ) {
+
+					if ( ! settled ) cancelStale();
+					return;
+
+				}
 
 				if ( ! settled ) {
 
@@ -695,6 +786,14 @@ export class MultiplayerManager {
 	}
 
 	async disconnect( silent = false ) {
+
+		this._connGen ++;
+		if ( this._connectTimer ) {
+
+			clearTimeout( this._connectTimer );
+			this._connectTimer = null;
+
+		}
 
 		for ( const conn of this._hostConns.values() ) {
 
@@ -896,14 +995,19 @@ export class MultiplayerManager {
 		const avatar = new RemotePlayerAvatar( { id, name, color } );
 		if ( this.app?.scene ) this.app.scene.add( avatar.group );
 
-		const el = document.createElement( 'div' );
-		el.className = 'tw-nameplate';
-		el.hidden = true;
-		el.innerHTML = `<span class="tw-np-dot"></span><span class="tw-np-name"></span><span class="tw-np-dist"></span>`;
-		el.querySelector( '.tw-np-dot' ).style.background = color;
-		el.querySelector( '.tw-np-name' ).textContent = name;
-		const layer = this.app?.ui?.ui?.nameplatesEl;
-		if ( layer ) layer.append( el );
+		let el = null;
+		if ( typeof document !== 'undefined' ) {
+
+			el = document.createElement( 'div' );
+			el.className = 'tw-nameplate';
+			el.hidden = true;
+			el.innerHTML = `<span class="tw-np-dot"></span><span class="tw-np-name"></span><span class="tw-np-dist"></span>`;
+			el.querySelector( '.tw-np-dot' ).style.background = color;
+			el.querySelector( '.tw-np-name' ).textContent = name;
+			const layer = this.app?.ui?.ui?.nameplatesEl;
+			if ( layer ) layer.append( el );
+
+		}
 
 		const initial = {
 			x: 20, y: 2, z: - 20, yaw: 0, pitch: 0, speed: 0, mode: 'walk', vehId: null,
@@ -966,12 +1070,15 @@ export class MultiplayerManager {
 
 	_handleIncomingMessage( msg ) {
 
+		if ( ! msg ) return;
 		const senderId = msg.from || msg.id;
 		if ( senderId === this.selfId && msg.t !== 'welcome' ) return;
+		const fromHost = this.role === 'guest' && ( ! this._hostId || senderId === this._hostId );
 
 		switch ( msg.t ) {
 
 			case 'welcome':
+				if ( this.role === 'host' ) break;
 				this._hostId = msg.hostId || senderId;
 				for ( const m of msg.peers || [] ) {
 
@@ -980,6 +1087,7 @@ export class MultiplayerManager {
 				}
 
 				if ( msg.world ) this._applyWorldSnapshot( msg.world );
+				if ( msg.tournament ) this._applyTournamentSnapshot( msg.tournament );
 				this._emitChat( { kind: 'system', text: `${ tr( 'Connected to room' ) }: ${ msg.room || this.roomCode }` } );
 				this._emitState();
 				break;
@@ -1015,7 +1123,7 @@ export class MultiplayerManager {
 			}
 
 			case 'world':
-				if ( this.role === 'guest' ) this._applyWorldSnapshot( msg );
+				if ( fromHost ) this._applyWorldSnapshot( msg );
 				break;
 
 			case 'chat':
@@ -1075,6 +1183,7 @@ export class MultiplayerManager {
 
 			case 'tourney_start': {
 
+				if ( ! fromHost ) break;
 				this._initTournamentLocal( msg.id, msg.mode, msg.durationSec );
 				const zh = getLang() === 'zh';
 				const mName = tr( `tourney_${ msg.mode }` );
@@ -1087,6 +1196,8 @@ export class MultiplayerManager {
 
 			case 'tourney_score': {
 
+				if ( ! this.tournament || ! this.tournament.active ) break;
+				if ( ! msg.tourneyId || msg.tourneyId !== this.tournament.id || ! ( msg.kg > 0 ) ) break;
 				this._applyTournamentCatch( senderId || msg.from, msg.name, msg.color, msg.species, msg.kg );
 				break;
 
@@ -1094,13 +1205,11 @@ export class MultiplayerManager {
 
 			case 'tourney_end': {
 
-				if ( this.tournament ) {
-
-					this.tournament.active = false;
-					this.tournament.remainingSec = 0;
-					this._emitTournament();
-
-				}
+				if ( ! fromHost || ! this.tournament ) break;
+				if ( msg.tourneyId && msg.tourneyId !== this.tournament.id ) break;
+				this.tournament.active = false;
+				this.tournament.remainingSec = 0;
+				this._emitTournament();
 
 				const sum = this.getTournamentSummary();
 				const top = sum?.rows?.[ 0 ];
@@ -1135,7 +1244,7 @@ export class MultiplayerManager {
 	_applyWorldSnapshot( w ) {
 
 		const app = this.app;
-		if ( ! app || ! w ) return;
+		if ( ! app || ! app.settings || ! w ) return;
 		if ( Math.abs( ( app.settings.timeOfDay ?? 0 ) - w.timeOfDay ) > 0.08 ) {
 
 			app.settings.timeOfDay = w.timeOfDay;
@@ -1323,6 +1432,74 @@ export class MultiplayerManager {
 		for ( const p of this.peers.values() ) seedEntry( p.id, p.name, p.color );
 
 		this.tournament = { id, mode, durationSec, remainingSec: durationSec, active: true, scores };
+		this._emitTournament();
+
+	}
+
+	_captureTournamentSnapshot() {
+
+		const t = this.tournament;
+		if ( ! t || ! t.active ) return null;
+		return {
+			id: t.id,
+			mode: t.mode,
+			durationSec: t.durationSec,
+			remainingSec: Math.max( 0, t.remainingSec ),
+			active: true,
+			rows: [ ...t.scores.values() ].map( ( r ) => ( {
+				id: r.id,
+				name: r.name,
+				color: r.color,
+				totalKg: r.totalKg,
+				biggestKg: r.biggestKg,
+				catchCount: r.catchCount,
+				species: [ ...r.speciesSet ],
+			} ) ),
+		};
+
+	}
+
+	_applyTournamentSnapshot( snap ) {
+
+		if ( ! snap || ! snap.id || ! snap.active || ! ( snap.remainingSec > 0 ) ) return;
+		const scores = new Map();
+		for ( const r of snap.rows || [] ) {
+
+			if ( ! r.id ) continue;
+			scores.set( r.id, {
+				id: r.id,
+				name: r.name,
+				color: r.color,
+				totalKg: Number( r.totalKg ) || 0,
+				biggestKg: Number( r.biggestKg ) || 0,
+				speciesSet: new Set( r.species || [] ),
+				catchCount: Number( r.catchCount ) || 0,
+			} );
+
+		}
+
+		if ( ! scores.has( this.selfId ) ) {
+
+			scores.set( this.selfId, {
+				id: this.selfId,
+				name: this.nickname,
+				color: this.selfColor,
+				totalKg: 0,
+				biggestKg: 0,
+				speciesSet: new Set(),
+				catchCount: 0,
+			} );
+
+		}
+
+		this.tournament = {
+			id: snap.id,
+			mode: snap.mode,
+			durationSec: snap.durationSec,
+			remainingSec: snap.remainingSec,
+			active: true,
+			scores,
+		};
 		this._emitTournament();
 
 	}

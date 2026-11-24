@@ -681,7 +681,7 @@ export class GameHUD {
 		const s = this.game.state;
 		const zh = getLang() === 'zh';
 		const rows = s.inventory.map( ( f ) => `<div class="gm-row has-cm"><span>${ trFish( f.species, FISH[ f.species ].name ) }${ f.record ? `<small>${ tr( 'record' ) }</small>` : '' }</span><span class="gm-cm">${ f.cm ?? Math.round( fishLengthCm( f.species, f.kg ) ) } cm</span><span class="gm-kg">${ f.kg.toFixed( 2 ) } kg</span><span class="gm-val">$${ f.value }</span><button class="gm-mini" data-release="${ f.id }">${ tr( 'Release' ) }</button></div>` ).join( '' );
-		const logged = Object.entries( s.log ).filter( ( [ k ] ) => FISH[ k ] ).map( ( [ k, v ] ) => zh
+		const logged = Object.entries( s.log ).filter( ( [ k, v ] ) => Object.prototype.hasOwnProperty.call( FISH, k ) && v && Number.isFinite( v.bestKg ) ).map( ( [ k, v ] ) => zh
 			? `${ trFish( k, FISH[ k ].name ) }：累计 ${ v.count } 条，最大 ${ v.bestKg.toFixed( 2 ) } kg · ${ v.bestCm ?? Math.round( fishLengthCm( k, v.bestKg ) ) } cm`
 			: `${ FISH[ k ].name }: ${ v.count } caught, best ${ v.bestKg.toFixed( 2 ) } kg · ${ v.bestCm ?? Math.round( fishLengthCm( k, v.bestKg ) ) } cm` ).join( '<br>' );
 		this.inv.innerHTML = `
@@ -745,9 +745,9 @@ GameHUD.prototype.renderShop = function () {
 	const zh = getLang() === 'zh';
 	const renderRow = ( key ) => {
 
+		if ( ! Object.prototype.hasOwnProperty.call( UPGRADES, key ) ) return '';
 		const track = UPGRADES[ key ];
-		if ( ! track ) return '';
-		const idx = s.upgrades[ key ] | 0;
+		const idx = Math.max( 0, Math.min( track.levels.length - 1, s.upgrades[ key ] | 0 ) );
 		const cur = track.levels[ idx ];
 		const next = nextLevel( s.upgrades, key );
 		const curLabel = trUpgradeLabel( key, idx, cur.label );

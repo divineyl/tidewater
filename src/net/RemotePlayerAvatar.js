@@ -209,7 +209,8 @@ export class RemotePlayerAvatar {
 
 	_applyAppearance( state ) {
 
-		const paintId = state.paint || 'stock';
+		const hasOwn = ( obj, k ) => typeof k === 'string' && Object.prototype.hasOwnProperty.call( obj, k );
+		const paintId = hasOwn( VEHICLE_PAINTS, state.paint ) ? state.paint : 'stock';
 		if ( paintId !== this._paintId ) {
 
 			this._paintId = paintId;
@@ -218,23 +219,23 @@ export class RemotePlayerAvatar {
 
 		}
 
-		const boatPaintId = state.boatPaint || 'classic';
+		const boatPaintId = hasOwn( BOAT_PAINTS, state.boatPaint ) ? state.boatPaint : 'classic';
 		if ( boatPaintId !== this._boatPaintId ) {
 
 			this._boatPaintId = boatPaintId;
-			const bSpec = BOAT_PAINTS[ boatPaintId ] || BOAT_PAINTS.classic;
+			const bSpec = BOAT_PAINTS[ boatPaintId ];
 			this.hullMat.uniforms.color.value.set( bSpec.topside );
 			this.cabinMat.uniforms.color.value.set( bSpec.stripe === 0xf2efe6 ? 0x2a486e : CABIN );
 
 		}
 
-		const tint = state.lightTint || 'warm';
+		const tint = hasOwn( VEHICLE_LIGHT_TINTS, state.lightTint ) ? state.lightTint : 'warm';
 		const lightOn = !! state.lightOn;
 		if ( tint !== this._lightTint || lightOn !== this._lightOn ) {
 
 			this._lightTint = tint;
 			this._lightOn = lightOn;
-			const spec = VEHICLE_LIGHT_TINTS[ tint ] || VEHICLE_LIGHT_TINTS.warm;
+			const spec = VEHICLE_LIGHT_TINTS[ tint ];
 			this.headLightMat.uniforms.color.value.set( spec.hex );
 			this.headLightMat.uniforms.emissive.value.set( spec.hex );
 			this.headLightMat.emissiveIntensity = lightOn ? 3.2 : 0.15;
@@ -352,7 +353,31 @@ export class RemotePlayerAvatar {
 
 	dispose( scene ) {
 
+		const geometries = new Set();
+		const materials = new Set();
+		this.group.traverse( ( obj ) => {
+
+			if ( obj.geometry ) geometries.add( obj.geometry );
+			if ( obj.material ) {
+
+				if ( Array.isArray( obj.material ) ) {
+
+					for ( const m of obj.material ) if ( m ) materials.add( m );
+
+				} else {
+
+					materials.add( obj.material );
+
+				}
+
+			}
+
+		} );
+		for ( const g of geometries ) g.dispose?.();
+		for ( const m of materials ) m.dispose?.();
+		this.group.clear?.();
 		if ( scene && this.group.parent === scene ) scene.remove( this.group );
+		else if ( this.group.parent ) this.group.parent.remove?.( this.group );
 
 	}
 

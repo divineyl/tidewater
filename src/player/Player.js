@@ -918,28 +918,53 @@ export class Player {
 
 		const st = this.coop && this.mp ? this.mp.getPeerRenderState( this.coop.peerId ) : null;
 		const wasBoat = this.coop?.kind === 'boat';
-		if ( st ) {
+		const waterY = Number.isFinite( this.waterMean ) ? this.waterMean : 0;
+		if ( st && Number.isFinite( st.x ) && Number.isFinite( st.z ) ) {
 
 			const yaw = st.yaw || 0;
-			const ox = Math.cos( yaw ) * ( wasBoat ? 2.1 : 1.65 );
-			const oz = - Math.sin( yaw ) * ( wasBoat ? 2.1 : 1.65 );
-			const tx = st.x + ox;
-			const tz = st.z + oz;
-			const g = this.groundAt( tx, tz, st.y + 3 );
-			this.position.set( tx, Math.max( g, this.waterMean - SWIM_EYE + 0.15 ), tz );
+			const dist = wasBoat ? 2.1 : 1.65;
+			const sy = Number.isFinite( st.y ) ? st.y : waterY;
+			const candidates = [
+				[ Math.cos( yaw ) * dist, - Math.sin( yaw ) * dist ],
+				[ - Math.cos( yaw ) * dist, Math.sin( yaw ) * dist ],
+				[ - Math.sin( yaw ) * dist, - Math.cos( yaw ) * dist ],
+			];
+			let chosen = null;
+			for ( const [ ox, oz ] of candidates ) {
+
+				const cand = _v.set( st.x + ox, Math.max( this.groundAt( st.x + ox, st.z + oz, sy + 3 ), waterY - SWIM_EYE + 0.15 ), st.z + oz );
+				const bx = cand.x, bz = cand.z;
+				this.colliders?.resolveCapsule?.( cand, RADIUS, HEIGHT );
+				const moved = Math.hypot( cand.x - bx, cand.z - bz );
+				if ( ! chosen || moved < 0.05 ) {
+
+					chosen = cand.clone();
+					if ( moved < 0.05 ) break;
+
+				}
+
+			}
+
+			if ( chosen ) {
+
+				const g = this.groundAt( chosen.x, chosen.z, sy + 3 );
+				this.position.set( chosen.x, Math.max( g, waterY - SWIM_EYE + 0.15 ), chosen.z );
+
+			}
 
 		}
 
 		this.coop = null;
 		this.velocity.set( 0, 0, 0 );
 		this._camY = null;
-		const depth = ( this.waterMean ?? 0 ) - this.groundAt( this.position.x, this.position.z, this.position.y + 3 );
+		const depth = waterY - this.groundAt( this.position.x, this.position.z, this.position.y + 3 );
 		this.mode = depth > SWIM_DEPTH ? 'swim' : 'walk';
 
 	}
 
 	updateCoop( dt ) {
 
+		const step = Number.isFinite( dt ) ? Math.min( 0.1, Math.max( 0, dt ) ) : 0;
 		const c = this.coop;
 		const st = c && this.mp ? this.mp.getPeerRenderState( c.peerId ) : null;
 		const validTarget = st && ( ( c.kind === 'boat' && st.mode === 'boat' ) || ( c.kind === 'buggy' && st.mode === 'vehicle' && st.vehId === 'buggy' ) );
@@ -966,7 +991,7 @@ export class Player {
 			_wish.addScaledVector( _right, move.x );
 			if ( _wish.lengthSq() > 1e-4 ) {
 
-				_wish.normalize().multiplyScalar( ( inp.down( 'ShiftLeft' ) ? 2.4 : 1.5 ) * dt );
+				_wish.normalize().multiplyScalar( ( inp.down( 'ShiftLeft' ) ? 2.4 : 1.5 ) * step );
 				c.localPos.x = THREE.MathUtils.clamp( c.localPos.x + _wish.x, - 0.88, 0.88 );
 				c.localPos.z = THREE.MathUtils.clamp( c.localPos.z + _wish.z, - 2.75, 0.12 );
 

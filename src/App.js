@@ -1100,6 +1100,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 	applyQualityPreset( id, save = true ) {
 
+		if ( typeof id !== 'string' || ! Object.prototype.hasOwnProperty.call( QUALITY_PRESETS, id ) ) return;
 		const p = QUALITY_PRESETS[ id ];
 		if ( ! p ) return;
 		this.qualityPreset = id;
@@ -1134,13 +1135,14 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		if ( ! this.prefs ) return;
 		const p = this.prefs.data;
 		const autoRec = ! this._hasExistingPrefs ? GPU.adapterInfo?.recommendedPreset : null;
-		if ( autoRec && autoRec !== 'high' && QUALITY_PRESETS[ autoRec ] ) {
+		const hasPreset = ( k ) => typeof k === 'string' && Object.prototype.hasOwnProperty.call( QUALITY_PRESETS, k );
+		if ( autoRec && autoRec !== 'high' && hasPreset( autoRec ) ) {
 
 			const urlScale = scaleOverride ? this.settings.renderScale : null;
 			this.applyQualityPreset( autoRec, false );
 			if ( urlScale !== null ) this.setRenderScale( urlScale );
 
-		} else if ( p.qualityPreset && p.qualityPreset !== 'custom' && QUALITY_PRESETS[ p.qualityPreset ] ) {
+		} else if ( p.qualityPreset && p.qualityPreset !== 'custom' && hasPreset( p.qualityPreset ) ) {
 
 			const urlScale = scaleOverride ? this.settings.renderScale : null;
 			this.applyQualityPreset( p.qualityPreset, false );

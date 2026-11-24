@@ -3,6 +3,8 @@ import { defaultUpgrades, gearStats, nextLevel, UPGRADES, FUEL_PRICE } from './G
 import { generateBounties, sanitizeBounties } from './Bounties.js';
 
 const SAVE_KEY = 'tidewater.save.v1';
+const UNSAFE_KEYS = new Set( [ '__proto__', 'constructor', 'prototype' ] );
+const hasOwn = ( obj, k ) => typeof k === 'string' && ! UNSAFE_KEYS.has( k ) && Object.prototype.hasOwnProperty.call( obj, k );
 
 // Everything the player owns: wallet, the fish in the cooler / hold, the fish log and the gear
 // levels. Saved to localStorage (per browser) after every change; storage can be missing or throw
@@ -121,7 +123,7 @@ export class GameState {
 	// spend money (upgrade shop); false when it can't be afforded
 	spend( amount ) {
 
-		if ( amount > this.money ) return false;
+		if ( ! Number.isFinite( amount ) || amount <= 0 || amount > this.money ) return false;
 		this.money -= amount;
 		this.save();
 		this.emit();
@@ -132,7 +134,7 @@ export class GameState {
 	// buy the next level of an upgrade track; returns the new level entry or null
 	buy( key ) {
 
-		if ( ! UPGRADES[ key ] ) return null;
+		if ( ! hasOwn( UPGRADES, key ) ) return null;
 		const next = nextLevel( this.upgrades, key );
 		if ( ! next || next.cost > this.money ) return null;
 		this.money -= next.cost;
@@ -153,6 +155,7 @@ export class GameState {
 	// burn litres (no save: that happens when the boat stops or at the next sale / purchase)
 	burn( litres ) {
 
+		if ( ! Number.isFinite( litres ) || litres < 0 ) return this.fuelL;
 		this.fuel = Math.max( 0, this.fuelL - litres );
 		return this.fuel;
 
@@ -194,7 +197,7 @@ export class GameState {
 
 	setLure( id ) {
 
-		if ( ! LURES[ id ] ) return false;
+		if ( ! hasOwn( LURES, id ) ) return false;
 		this.lure = id;
 		this.save();
 		this.emit();
@@ -205,7 +208,7 @@ export class GameState {
 	addMoney( amount ) {
 
 		const delta = Math.round( Number( amount ) || 0 );
-		if ( delta <= 0 ) return 0;
+		if ( ! Number.isFinite( delta ) || delta <= 0 ) return 0;
 		this.money += delta;
 		this.save();
 		this.emit();
@@ -224,16 +227,17 @@ export class GameState {
 
 	recordLandmark( id, isPhoto = false, reward = 0 ) {
 
-		if ( ! id ) return { isNew: false, isNewPhoto: false };
-		const prev = this.landmarks[ id ] && typeof this.landmarks[ id ] === 'object'
-			? this.landmarks[ id ]
-			: { visited: !! this.landmarks[ id ], photo: false };
+		if ( ! id || typeof id !== 'string' || UNSAFE_KEYS.has( id ) ) return { isNew: false, isNewPhoto: false };
+		const existing = hasOwn( this.landmarks, id ) ? this.landmarks[ id ] : null;
+		const prev = existing && typeof existing === 'object'
+			? existing
+			: { visited: !! existing, photo: false };
 		const isNew = ! prev.visited;
 		const isNewPhoto = !! ( isPhoto && ! prev.photo );
 		if ( ! isNew && ! isNewPhoto ) return { isNew: false, isNewPhoto: false };
 
 		this.landmarks[ id ] = { visited: true, photo: prev.photo || !! isPhoto };
-		if ( reward > 0 ) this.money += Math.round( reward );
+		if ( Number.isFinite( reward ) && reward > 0 ) this.money += Math.round( reward );
 		this.save();
 		this.emit();
 		return { isNew, isNewPhoto };
@@ -276,22 +280,78 @@ export class GameState {
 	fromJSON( d ) {
 
 		if ( ! d || d.v !== 1 ) return false;
-		this.money = Number.isFinite( d.money ) ? d.money : 0;
-		this.inventory = Array.isArray( d.inventory ) ? d.inventory.filter( ( f ) => f && FISH[ f.species ] && Number.isFinite( f.kg ) ) : [];
-		// saves from before lengths were recorded
-		for ( const f of this.inventory ) if ( ! Number.isFinite( f.cm ) ) f.cm = Math.round( fishLengthCm( f.species, f.kg ) );
-		this.log = d.log && typeof d.log === 'object' ? d.log : {};
-		for ( const [ k, v ] of Object.entries( this.log ) ) if ( FISH[ k ] && v && v.bestKg > 0 && ! Number.isFinite( v.bestCm ) ) v.bestCm = Math.round( fishLengthCm( k, v.bestKg ) );
-		this.upgrades = { ...defaultUpgrades(), ...( d.upgrades || {} ) };
-		this.fuel = Number.isFinite( d.fuel ) ? d.fuel : null;
-		this.lure = LURES[ d.lure ] ? d.lure : 'standard';
+		this.money = Number.isFinite( d.money ) && d.money >= 0 ? d.money : 0;
+
+		const seenIds = new Set();
+		let maxId = 0;
+		const cleanedInv = [];
+		if ( Array.isArray( d.inventory ) ) {
+
+			for ( const f of d.inventory ) {
+
+				if ( ! f || ! hasOwn( FISH, f.species ) || ! Number.isFinite( f.kg ) || f.kg <= 0 ) continue;
+				const kg = Math.round( f.kg * 100 ) / 100;
+				if ( kg <= 0 ) continue;
+				let id = Number.isInteger( f.id ) && f.id >= 1 && ! seenIds.has( f.id ) ? f.id : ++ maxId;
+				while ( seenIds.has( id ) ) id = ++ maxId;
+				seenIds.add( id );
+				if ( id > maxId ) maxId = id;
+				const cm = Number.isFinite( f.cm ) && f.cm > 0 ? Math.round( f.cm ) : Math.round( fishLengthCm( f.species, kg ) );
+				const value = Number.isFinite( f.value ) && f.value >= 0 ? Math.round( f.value ) : fishValue( f.species, kg );
+				const caughtAt = Number.isFinite( f.caughtAt ) ? f.caughtAt : 12;
+				cleanedInv.push( { id, species: f.species, kg, cm, value, caughtAt, record: !! f.record } );
+
+			}
+
+		}
+
+		this.inventory = cleanedInv;
+
+		const cleanedLog = {};
+		if ( d.log && typeof d.log === 'object' ) {
+
+			for ( const [ k, v ] of Object.entries( d.log ) ) {
+
+				if ( ! hasOwn( FISH, k ) || ! v || typeof v !== 'object' ) continue;
+				if ( ! Number.isFinite( v.bestKg ) || v.bestKg <= 0 ) continue;
+				const bestCm = Number.isFinite( v.bestCm ) && v.bestCm > 0 ? Math.round( v.bestCm ) : Math.round( fishLengthCm( k, v.bestKg ) );
+				cleanedLog[ k ] = {
+					count: Math.max( 1, Number.isFinite( v.count ) ? ( v.count | 0 ) : 1 ),
+					bestKg: v.bestKg,
+					bestCm,
+				};
+
+			}
+
+		}
+
+		this.log = cleanedLog;
+
+		const baseUpgrades = defaultUpgrades();
+		if ( d.upgrades && typeof d.upgrades === 'object' ) {
+
+			for ( const k of Object.keys( UPGRADES ) ) {
+
+				if ( ! hasOwn( d.upgrades, k ) ) continue;
+				const lvLen = UPGRADES[ k ].levels.length;
+				const raw = Number( d.upgrades[ k ] );
+				baseUpgrades[ k ] = Number.isFinite( raw ) ? Math.max( 0, Math.min( lvLen - 1, raw | 0 ) ) : 0;
+
+			}
+
+		}
+
+		this.upgrades = baseUpgrades;
+		this.fuel = Number.isFinite( d.fuel ) && d.fuel >= 0 ? d.fuel : null;
+		this.lure = hasOwn( LURES, d.lure ) ? d.lure : 'standard';
 		this.bounties = sanitizeBounties( d.bounties );
-		this.bountiesDone = Math.max( 0, Number( d.bountiesDone ) | 0 );
+		this.bountiesDone = Math.max( 0, Number.isFinite( d.bountiesDone ) ? ( d.bountiesDone | 0 ) : 0 );
 		this.landmarks = {};
 		if ( d.landmarks && typeof d.landmarks === 'object' ) {
 
 			for ( const [ lk, lv ] of Object.entries( d.landmarks ) ) {
 
+				if ( ! lk || UNSAFE_KEYS.has( lk ) ) continue;
 				if ( lv ) this.landmarks[ lk ] = { visited: true, photo: !! ( lv && lv.photo ) };
 
 			}
@@ -303,7 +363,8 @@ export class GameState {
 			motorcycle: Number.isFinite( rb.motorcycle ) && rb.motorcycle > 0 ? rb.motorcycle : null,
 			buggy: Number.isFinite( rb.buggy ) && rb.buggy > 0 ? rb.buggy : null,
 		};
-		this._nextId = Math.max( d.nextId | 0, ...this.inventory.map( ( f ) => f.id + 1 ), 1 );
+		const savedNext = Number.isFinite( d.nextId ) && d.nextId >= 1 ? ( d.nextId | 0 ) : 1;
+		this._nextId = Math.max( savedNext, maxId + 1, 1 );
 		return true;
 
 	}
