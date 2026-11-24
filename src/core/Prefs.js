@@ -27,7 +27,14 @@ export const DEFAULT_PREFS = Object.freeze( {
 	vehHeadlight: false,
 	vehPaint: 'stock',
 	vehLightTint: 'warm',
+	boatPaint: 'classic',
+	boatName: '',
+	islandRadio: false,
 	photoPostcard: true,
+	cloudQuality: 'high',
+	caustics: true,
+	autoFps: false,
+	mpName: '',
 	motorcyclePose: null,
 	buggyPose: null,
 } );
@@ -53,13 +60,16 @@ const finite = ( v, fallback ) => ( typeof v === 'number' && Number.isFinite( v 
 export function normalizePrefs( raw ) {
 
 	const src = raw && typeof raw === 'object' ? raw : {};
-	const preset = [ 'eco', 'balanced', 'high', 'ultra', 'custom' ].includes( src.qualityPreset ) ? src.qualityPreset : DEFAULT_PREFS.qualityPreset;
+	const preset = [ 'potato', 'eco', 'balanced', 'high', 'ultra', 'custom' ].includes( src.qualityPreset ) ? src.qualityPreset : DEFAULT_PREFS.qualityPreset;
 	const aaOpts = [ 0, 2, 4, 8, 16 ];
 	const aaVal = aaOpts.includes( Number( src.aa ) ) ? Number( src.aa ) : DEFAULT_PREFS.aa;
 	const camMode = src.camMode === 'first' || src.camMode === 'third' ? src.camMode : DEFAULT_PREFS.camMode;
 	const vehPreset = src.vehPreset === 'arcade' || src.vehPreset === 'realistic' ? src.vehPreset : DEFAULT_PREFS.vehPreset;
 	const vehPaint = [ 'stock', 'coral', 'teal', 'sand', 'obsidian', 'pearl' ].includes( src.vehPaint ) ? src.vehPaint : DEFAULT_PREFS.vehPaint;
 	const vehLightTint = [ 'warm', 'led', 'amber' ].includes( src.vehLightTint ) ? src.vehLightTint : DEFAULT_PREFS.vehLightTint;
+	const boatPaint = [ 'classic', 'navy', 'coral', 'emerald', 'sunburst', 'midnight' ].includes( src.boatPaint ) ? src.boatPaint : DEFAULT_PREFS.boatPaint;
+	const boatName = typeof src.boatName === 'string' ? src.boatName.replace( /[\x00-\x1f\x7f]/g, ' ' ).trim().slice( 0, 18 ) : DEFAULT_PREFS.boatName;
+	const cloudQuality = [ 'off', 'low', 'medium', 'high' ].includes( src.cloudQuality ) ? src.cloudQuality : DEFAULT_PREFS.cloudQuality;
 	const weatherPreset = typeof src.weatherPreset === 'string' && src.weatherPreset ? src.weatherPreset : DEFAULT_PREFS.weatherPreset;
 
 	const normPose = ( pose ) => {
@@ -75,10 +85,13 @@ export function normalizePrefs( raw ) {
 
 	return {
 		qualityPreset: preset,
-		renderScale: clamp( finite( Number( src.renderScale ), DEFAULT_PREFS.renderScale ), 0.5, 1 ),
+		renderScale: clamp( finite( Number( src.renderScale ), DEFAULT_PREFS.renderScale ), 0.4, 1 ),
 		aa: aaVal,
 		shadows: typeof src.shadows === 'boolean' ? src.shadows : DEFAULT_PREFS.shadows,
 		ssr: typeof src.ssr === 'boolean' ? src.ssr : DEFAULT_PREFS.ssr,
+		cloudQuality,
+		caustics: typeof src.caustics === 'boolean' ? src.caustics : DEFAULT_PREFS.caustics,
+		autoFps: typeof src.autoFps === 'boolean' ? src.autoFps : DEFAULT_PREFS.autoFps,
 		audioVolume: clamp( finite( Number( src.audioVolume ), DEFAULT_PREFS.audioVolume ), 0, 1 ),
 		audioMuted: typeof src.audioMuted === 'boolean' ? src.audioMuted : DEFAULT_PREFS.audioMuted,
 		volAmbient: clamp( finite( Number( src.volAmbient ), DEFAULT_PREFS.volAmbient ), 0, 1 ),
@@ -98,7 +111,11 @@ export function normalizePrefs( raw ) {
 		vehHeadlight: typeof src.vehHeadlight === 'boolean' ? src.vehHeadlight : DEFAULT_PREFS.vehHeadlight,
 		vehPaint,
 		vehLightTint,
+		boatPaint,
+		boatName,
+		islandRadio: typeof src.islandRadio === 'boolean' ? src.islandRadio : DEFAULT_PREFS.islandRadio,
 		photoPostcard: typeof src.photoPostcard === 'boolean' ? src.photoPostcard : DEFAULT_PREFS.photoPostcard,
+		mpName: typeof src.mpName === 'string' ? src.mpName.replace( /[\x00-\x1f\x7f]/g, ' ' ).trim().slice( 0, 16 ) : DEFAULT_PREFS.mpName,
 		motorcyclePose,
 		buggyPose,
 	};

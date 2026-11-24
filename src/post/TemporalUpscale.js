@@ -174,10 +174,15 @@ export class TemporalUpscale {
 		// FSR2 ffxFsr2GetJitterPhaseCount / ffxFsr2GetJitterOffset
 		const b = this._beautyTexture();
 		const ratio = b && b.width ? this._outW / b.width : 1;
-		const phases = this.jitterPhaseOverride || Math.max( 1, Math.ceil( 8 * ratio * ratio ) );
+		const upscaling = ratio > 1.05;
+		const fsrPhases = Math.max( 1, Math.ceil( 8 * ratio * ratio ) );
+		const phases = upscaling
+			? Math.max( this.jitterPhaseOverride || 0, fsrPhases )
+			: ( this.jitterPhaseOverride || fsrPhases );
 		this.uniforms.fields.jitterPhases.value = phases;
 		const i = this._jitterIndex % phases;
-		const k = this.jitterScale * ( 1 + ( this.jitterMoving - 1 ) * this._cameraMotion() );
+		const baseScale = upscaling ? Math.min( 1.0, this.jitterScale + ( ratio - 1 ) * 1.2 ) : this.jitterScale;
+		const k = baseScale * ( 1 + ( this.jitterMoving - 1 ) * this._cameraMotion() );
 		this.jitterNow = k; // (the UI shows it)
 		const jx = ( halton( i + 1, 2 ) - 0.5 ) * k, jy = ( halton( i + 1, 3 ) - 0.5 ) * k;
 		this._jitterOffset.value.set( jx, jy );

@@ -263,7 +263,7 @@ fn postColorAO( uv: vec2f ) -> vec3f {
 	let isSky = dO < 1e-7;
 	let covered = dF > dO + 1e-7;
 	// no AO there (k = 0 below): skip the upsample
-	if ( isSky || covered ) { return c; }
+	if ( isSky || covered || post.aoStrength <= 0.001 ) { return c; }
 	// depth-aware upsample of the half-res AO: the 4 nearest AO texels, weighted by how close
 	// their depth is to this pixel's (no dark halos bleeding across depth edges)
 	// (the AO texels' depths: the half resolution copy the AO was computed from)
@@ -647,11 +647,15 @@ fn fragment( in: FSIn ) -> vec4f {
 
 		if ( ! this._built ) this.beginFrame();
 		const T = this._timers || null;
-		this.motionBlur.compute( this._outW, this._outH );
-		this._aoDepthPass.render( { colorViews: [ this.aoDepth.texture ], clear: CLR } );
-		this.aoPass.render();
-		this._aoBlurXPass.render( { colorViews: [ this.aoBlurX.texture ], clear: CLR } );
-		this._aoBlurYPass.render( { colorViews: [ this.aoBlurY.texture ], clear: CLR } );
+		if ( this.motionBlur && this.motionBlur.shutter.value > 0.001 ) this.motionBlur.compute( this._outW, this._outH );
+		if ( this.params.aoStrength.value > 0.001 ) {
+
+			this._aoDepthPass.render( { colorViews: [ this.aoDepth.texture ], clear: CLR } );
+			this.aoPass.render();
+			this._aoBlurXPass.render( { colorViews: [ this.aoBlurX.texture ], clear: CLR } );
+			this._aoBlurYPass.render( { colorViews: [ this.aoBlurY.texture ], clear: CLR } );
+
+		}
 		this._mediumPass.render( { colorViews: [ this.medium.texture ], clear: CLR } );
 		// caustic shafts / torch beam march (half res): only while the lens can be under water (the CPU
 		// water height lags the GPU's by a frame: 1 m of margin)

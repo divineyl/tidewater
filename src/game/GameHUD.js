@@ -1,6 +1,8 @@
-import { FISH, fishLengthCm } from './FishTable.js';
-import { UPGRADES, nextLevel, FUEL_PRICE } from './Gear.js';
+import { FISH, LURES, LURE_IDS, fishLengthCm } from './FishTable.js';
+import { UPGRADES, BOAT_PAINTS, BOAT_PAINT_IDS, nextLevel, FUEL_PRICE } from './Gear.js';
 import { FishPortrait } from './FishPortrait.js';
+import { LANDMARKS } from './Landmarks.js';
+import { RALLY_GATES, RALLY_MEDALS } from './RallyCourse.js';
 import { getLang, onLangChange, tr, trFish, trUpgradeName, trUpgradeLabel } from '../i18n/i18n.js';
 
 // DOM for the fishing game, in the look of the rest of the HUD (ui/ui.css tokens, .tw-glass):
@@ -81,6 +83,35 @@ const CSS = /* css */`
 .gm-log { margin-top: var(--tw-3); color: var(--tw-ink-3); font-size: var(--tw-fs-sm); line-height: 1.5; }
 .gm-row .gm-cm { font-family: var(--tw-mono); color: var(--tw-ink-3); }
 .gm-row.has-cm { grid-template-columns: 1fr auto auto auto auto; }
+
+/* Lure badge & Rally timer HUD */
+.gm-lure { position: absolute; right: var(--tw-edge); top: calc(var(--tw-edge) + 42 * var(--tw-u)); display: none; align-items: center; gap: var(--tw-2);
+	padding: var(--tw-1) var(--tw-3); border-radius: 999px; font: 500 var(--tw-fs-xs) var(--tw-font); color: var(--tw-aqua); pointer-events: none;
+	transition: right var(--tw-slow) var(--tw-ease); }
+.gm-lure.is-on { display: inline-flex; }
+.gm-lure kbd { font: 600 10px var(--tw-mono); padding: 1px 5px; border-radius: 4px; background: var(--tw-fill-2); color: var(--tw-ink); }
+.tw-root[data-panel='open'] .gm-lure { right: calc(var(--tw-panel-w) + 2 * var(--tw-3)); }
+
+.gm-rally { position: absolute; left: 50%; top: var(--tw-edge); transform: translateX(-50%); display: none; align-items: center; gap: var(--tw-3);
+	padding: var(--tw-2) var(--tw-4); border-radius: 999px; font: 600 var(--tw-fs-md) var(--tw-mono); color: var(--tw-sun); pointer-events: none; z-index: 20; }
+.gm-rally.is-on { display: inline-flex; }
+
+/* Island Journal (J) */
+.gm-journal { width: min(92vw, calc(520 * var(--tw-u))); max-height: 76vh; z-index: 44; }
+.gm-j-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: var(--tw-3); }
+.gm-j-tab { font: 600 var(--tw-fs-xs) var(--tw-font); color: var(--tw-ink-2); background: var(--tw-fill); border: 1px solid var(--tw-line);
+	border-radius: 8px; padding: 6px 4px; cursor: pointer; transition: background var(--tw-fast), color var(--tw-fast), border-color var(--tw-fast); }
+.gm-j-tab.is-active { background: rgba(var(--tw-aqua-rgb), 0.18); color: var(--tw-aqua); border-color: rgba(var(--tw-aqua-rgb), 0.5); }
+.gm-j-card { padding: var(--tw-2) var(--tw-3); border-radius: var(--tw-r-md); background: var(--tw-fill); border: 1px solid var(--tw-line); margin-bottom: var(--tw-2); }
+.gm-j-row { display: flex; justify-content: space-between; align-items: center; gap: var(--tw-2); }
+.gm-j-title { font-weight: 600; color: var(--tw-ink); }
+.gm-j-sub { font-size: var(--tw-fs-xs); color: var(--tw-ink-3); margin-top: 3px; line-height: 1.45; }
+.gm-j-prog { height: 5px; border-radius: 99px; background: var(--tw-fill-2); overflow: hidden; margin-top: 6px; }
+.gm-j-prog > span { display: block; height: 100%; background: var(--tw-aqua); }
+.gm-j-card.is-done { border-color: rgba(var(--tw-aqua-rgb), 0.45); background: rgba(var(--tw-aqua-rgb), 0.08); }
+.gm-j-badge { font: 600 var(--tw-fs-xs) var(--tw-mono); color: var(--tw-sun); white-space: nowrap; }
+.gm-j-badge.is-done { color: var(--tw-aqua); }
+.gm-stand-bounties { margin-top: var(--tw-2); padding-top: var(--tw-2); border-top: 1px solid var(--tw-line); font-size: var(--tw-fs-xs); color: var(--tw-ink-2); }
 
 /* catch card: full screen. The world dims and blurs; the fish lies side-on in its own studio light
    (FishPortrait, a WebGPU canvas) between the name above and the numbers below */
@@ -205,18 +236,24 @@ export class GameHUD {
 		this.cast = h( 'div', 'gm-cast', '<span></span>' );
 		this.castBar = this.cast.firstChild;
 		this.dot = h( 'div', 'gm-dot' );
+		this.lureEl = h( 'div', 'gm-lure tw-glass', '<kbd>B</kbd><span class="gm-lure-txt"></span>' );
+		this.lureTxt = this.lureEl.querySelector( '.gm-lure-txt' );
+		this.rallyEl = h( 'div', 'gm-rally tw-glass', '' );
 		this.catchScrim = h( 'div', 'gm-catch-scrim' );
 		this.catchCard = h( 'div', 'gm-catch tw-glass' );
 		this.catchOpen = false;
 		const hud = ui.hud || ui.root;
-		hud.append( this.catchScrim, this.purse, this.fight, this.bite, this.cast, this.dot, this.catchCard );
+		hud.append( this.catchScrim, this.purse, this.lureEl, this.rallyEl, this.fight, this.bite, this.cast, this.dot, this.catchCard );
 
 		// panels (interactive)
 		this.inv = h( 'div', 'gm-panel tw-glass tw-interactive' );
 		this.stand = h( 'div', 'gm-panel tw-glass tw-interactive' );
-		ui.root.append( this.inv, this.stand );
+		this.journal = h( 'div', 'gm-panel gm-journal tw-glass tw-interactive' );
+		ui.root.append( this.inv, this.stand, this.journal );
 		this.invOpen = false;
 		this.standOpen = false;
+		this.journalOpen = false;
+		this.journalTab = 'bounties';
 		this._last = {};
 		game.state.onChange( () => this.refresh() );
 		this._unsubLang = onLangChange( () => this.refresh() );
@@ -254,11 +291,12 @@ export class GameHUD {
 		this._last.money = s.money;
 		if ( this.invOpen ) this.renderInventory();
 		if ( this.standOpen ) this.vendor && this.vendor.kind === 'shop' ? this.renderShop() : this.renderStand();
+		if ( this.journalOpen ) this.renderJournal();
 
 	}
 
 	// per frame
-	update( { fight, casting, power, bite, aiming, fuel = null, sonar = null } ) {
+	update( { fight, casting, power, bite, aiming, fuel = null, sonar = null, lure = null, rally = null } ) {
 
 		// boat instruments in the purse: fuel while aboard, the fish finder when fitted
 		this.fuelEl.classList.toggle( 'is-on', !! fuel );
@@ -303,7 +341,35 @@ export class GameHUD {
 		this.bite.classList.toggle( 'is-on', !! bite );
 		this.cast.classList.toggle( 'is-on', !! casting );
 		if ( casting ) this.castBar.style.width = `${ power * 100 }%`;
-		this.dot.classList.toggle( 'is-on', !! aiming && ! this.invOpen && ! this.standOpen );
+		this.dot.classList.toggle( 'is-on', !! aiming && ! this.invOpen && ! this.standOpen && ! this.journalOpen );
+
+		if ( this.lureEl ) {
+
+			const showLure = !! lure && ! this.invOpen && ! this.standOpen && ! this.journalOpen;
+			this.lureEl.classList.toggle( 'is-on', showLure );
+			if ( showLure && this.lureTxt ) {
+
+				const spec = LURES[ lure ] || LURES.standard;
+				this.lureTxt.textContent = tr( spec.name );
+
+			}
+
+		}
+
+		if ( this.rallyEl ) {
+
+			const showRally = !! rally;
+			this.rallyEl.classList.toggle( 'is-on', showRally );
+			if ( showRally ) {
+
+				const zh = getLang() === 'zh';
+				this.rallyEl.textContent = zh
+					? `东岬计时赛 · 门 ${ rally.gate }/${ rally.total } · ${ rally.elapsed.toFixed( 1 ) }s`
+					: `Rally · Gate ${ rally.gate }/${ rally.total } · ${ rally.elapsed.toFixed( 1 ) }s`;
+
+			}
+
+		}
 
 	}
 
@@ -402,6 +468,7 @@ export class GameHUD {
 		if ( this.invOpen ) {
 
 			this.closeStand();
+			this.toggleJournal( false );
 			if ( this.game.minimap ) this.game.minimap.toggleFull( false );
 			this.renderInventory();
 			releaseMouse();
@@ -409,6 +476,203 @@ export class GameHUD {
 		}
 
 		this.inv.classList.toggle( 'is-open', this.invOpen );
+
+	}
+
+	toggleJournal( force ) {
+
+		this.journalOpen = force ?? ! this.journalOpen;
+		if ( this.journalOpen ) {
+
+			this.toggleInventory( false );
+			this.closeStand();
+			if ( this.game.minimap ) this.game.minimap.toggleFull( false );
+			this.renderJournal();
+			releaseMouse();
+
+		}
+
+		this.journal.classList.toggle( 'is-open', this.journalOpen );
+
+	}
+
+	renderJournal() {
+
+		const s = this.game.state;
+		const zh = getLang() === 'zh';
+		const tabs = [
+			[ 'bounties', zh ? '悬赏订单' : 'Bounties' ],
+			[ 'lures', zh ? '拟饵与鱼王' : 'Lures & Legends' ],
+			[ 'landmarks', zh ? '明信片打卡' : 'Viewpoints' ],
+			[ 'rally', zh ? '越野计时赛' : 'Rally Trial' ],
+		];
+
+		let body = '';
+		if ( this.journalTab === 'bounties' ) {
+
+			const cards = ( s.bounties || [] ).map( ( b ) => {
+
+				const pct = Math.min( 100, Math.round( ( b.progress / b.target ) * 100 ) );
+				return `<div class="gm-j-card ${ b.completed ? 'is-done' : '' }">
+					<div class="gm-j-row">
+						<span class="gm-j-title">${ zh ? b.titleZh : b.titleEn }</span>
+						<span class="gm-j-badge ${ b.completed ? 'is-done' : '' }">${ b.completed ? ( zh ? '已完成' : 'Done' ) : `+$${ b.reward }` }</span>
+					</div>
+					<div class="gm-j-sub">${ zh ? `进度：${ b.progress } / ${ b.target }` : `Progress: ${ b.progress } / ${ b.target }` }</div>
+					<div class="gm-j-prog"><span style="width:${ pct }%"></span></div>
+				</div>`;
+
+			} ).join( '' );
+			body = `${ cards }
+				<div class="gm-foot">
+					<span class="gm-sub">${ zh ? `累计完成悬赏：${ s.bountiesDone } 单` : `Completed orders: ${ s.bountiesDone }` }</span>
+					<button type="button" class="gm-mini" data-refresh-bounties>${ zh ? '刷新今日委托' : 'New orders' }</button>
+				</div>`;
+
+		} else if ( this.journalTab === 'lures' ) {
+
+			const lureCards = LURE_IDS.map( ( id ) => {
+
+				const sp = LURES[ id ];
+				const active = s.lure === id;
+				return `<div class="gm-j-card ${ active ? 'is-done' : '' }">
+					<div class="gm-j-row">
+						<span class="gm-j-title">${ tr( sp.name ) }</span>
+						<button type="button" class="gm-mini" data-pick-lure="${ id }">${ active ? ( zh ? '装备中' : 'Equipped' ) : ( zh ? '切换' : 'Equip' ) }</button>
+					</div>
+					<div class="gm-j-sub">${ tr( sp.desc ) }</div>
+				</div>`;
+
+			} ).join( '' );
+
+			const legendIds = [ 'goldenTrevally', 'sailfish', 'blueMarlin' ];
+			const legTipsZh = {
+				goldenTrevally: '栖息地：珊瑚礁/浅滩 · 条件：黎明黄昏或使用「礁石铁板拟饵」',
+				sailfish: '栖息地：深海远洋 · 条件：晨昏/雨天或使用「深海活饵/暴风沉铅饵」',
+				blueMarlin: '栖息地：深海（>20m）· 条件：暴风雨天或装备「暴风沉铅饵」搏斗',
+			};
+			const legTipsEn = {
+				goldenTrevally: 'Habitat: Reef · Dawn/dusk or Reef Metal Jig',
+				sailfish: 'Habitat: Deep sea · Dawn/dusk, rain, Live Bait or Storm Plug',
+				blueMarlin: 'Habitat: Deep sea · Stormy weather or Heavy Storm Plug',
+			};
+			const legCards = legendIds.map( ( id ) => {
+
+				const rec = s.log?.[ id ];
+				const f = FISH[ id ];
+				const caught = rec && rec.count > 0;
+				return `<div class="gm-j-card ${ caught ? 'is-done' : '' }">
+					<div class="gm-j-row">
+						<span class="gm-j-title">${ trFish( id, f.name ) }</span>
+						<span class="gm-j-badge ${ caught ? 'is-done' : '' }">${ caught ? `${ rec.bestKg.toFixed( 1 ) } kg` : ( zh ? '未捕获' : 'Uncaught' ) }</span>
+					</div>
+					<div class="gm-j-sub">${ zh ? legTipsZh[ id ] : legTipsEn[ id ] }</div>
+				</div>`;
+
+			} ).join( '' );
+
+			body = `${ lureCards }<div class="gm-shop-sec">${ zh ? '海岛传奇鱼王图鉴' : 'Legendary Boss Fish' }</div>${ legCards }`;
+
+		} else if ( this.journalTab === 'landmarks' ) {
+
+			body = LANDMARKS.map( ( lm ) => {
+
+				const rec = s.landmarks?.[ lm.id ];
+				const visited = !! ( rec && ( rec === true || rec.visited ) );
+				const photo = !! ( rec && rec.photo );
+				const status = photo ? ( zh ? '已拍照打卡 ★' : 'Photo ★' ) : visited ? ( zh ? '已探索 ✓' : 'Visited ✓' ) : `+$${ lm.reward }`;
+				return `<div class="gm-j-card ${ visited ? 'is-done' : '' }">
+					<div class="gm-j-row">
+						<span class="gm-j-title">${ zh ? lm.nameZh : lm.nameEn }</span>
+						<div style="display:flex;gap:6px;align-items:center">
+							<span class="gm-j-badge ${ visited ? 'is-done' : '' }">${ status }</span>
+							<button type="button" class="gm-mini" data-nav-lm="${ lm.id }">${ zh ? '设为导航' : 'Navigate' }</button>
+						</div>
+					</div>
+					<div class="gm-j-sub">${ zh ? lm.hintZh : lm.hintEn }</div>
+				</div>`;
+
+			} ).join( '' );
+
+		} else {
+
+			const mb = s.rallyBest?.motorcycle;
+			const bb = s.rallyBest?.buggy;
+			body = `
+				<div class="gm-j-card">
+					<div class="gm-j-title">${ zh ? '东岬盘山越野计时赛（共 10 个检查点）' : 'East Headland Off-Road Rally (10 Gates)' }</div>
+					<div class="gm-j-sub">${ zh ? '从船屋东侧山路出发一路攀升至灯塔观景台。驾驶摩托车或越野车穿过发光起点门自动开表，或直接点击下方导航起点。' : 'Drive from the boathouse east road up to the lighthouse. Pass gate 1 or press U in any land vehicle to start.' }</div>
+				</div>
+				<div class="gm-j-card">
+					<div class="gm-j-row"><span class="gm-j-title">${ zh ? '奖牌标准' : 'Medals' }</span><span class="gm-j-badge">🥇 ≤${ RALLY_MEDALS.gold.sec }s · 🥈 ≤${ RALLY_MEDALS.silver.sec }s · 🥉 ≤${ RALLY_MEDALS.bronze.sec }s</span></div>
+					<div class="gm-j-sub">${ zh ? `金牌奖励 $${ RALLY_MEDALS.gold.reward } · 银牌 $${ RALLY_MEDALS.silver.reward } · 铜牌 $${ RALLY_MEDALS.bronze.reward }` : `Gold +$${ RALLY_MEDALS.gold.reward } · Silver +$${ RALLY_MEDALS.silver.reward } · Bronze +$${ RALLY_MEDALS.bronze.reward }` }</div>
+				</div>
+				<div class="gm-j-card">
+					<div class="gm-j-row"><span class="gm-j-title">${ zh ? '个人最佳圈速' : 'Personal Best' }</span><span class="gm-j-badge">${ zh ? '摩托' : 'Bike' }: ${ mb ? mb.toFixed( 2 ) + 's' : '--' } · ${ zh ? '越野车' : 'Buggy' }: ${ bb ? bb.toFixed( 2 ) + 's' : '--' }</span></div>
+					<div class="gm-j-sub" style="display:flex;gap:8px;margin-top:8px">
+						<button type="button" class="gm-mini" data-nav-rally>${ zh ? '导航到起点门' : 'Navigate to Start' }</button>
+						<button type="button" class="gm-mini" data-start-rally>${ zh ? '立刻开跑 (U)' : 'Start Now (U)' }</button>
+					</div>
+				</div>`;
+
+		}
+
+		this.journal.innerHTML = `
+			<h2>${ zh ? '海岛手账与委托' : 'Island Journal' }</h2>
+			<p class="gm-sub">${ zh ? '悬赏订单 · 拟饵与传奇鱼王 · 风景明信片 · 东岬越野计时赛' : 'Daily bounties · Lures & Legends · Postcard spots · Rally' }</p>
+			<div class="gm-j-tabs">${ tabs.map( ( [ id, label ] ) => `<button type="button" class="gm-j-tab ${ this.journalTab === id ? 'is-active' : '' }" data-jtab="${ id }">${ label }</button>` ).join( '' ) }</div>
+			<div class="gm-list">${ body }</div>
+			<div class="gm-foot"><span class="gm-sub">${ zh ? '随时按 J 键打开或关闭' : 'Press J anytime' }</span><button class="gm-btn is-ghost" data-jclose>${ zh ? '关闭 (J)' : 'Close (J)' }</button></div>`;
+
+		this.journal.querySelector( '[data-jclose]' ).onclick = () => this.toggleJournal( false );
+		for ( const b of this.journal.querySelectorAll( '[data-jtab]' ) ) b.onclick = () => { this.journalTab = b.dataset.jtab; this.renderJournal(); };
+
+		const refBtn = this.journal.querySelector( '[data-refresh-bounties]' );
+		if ( refBtn ) refBtn.onclick = () => { s.refreshBounties( Date.now() ); this.game.toast( tr( 'New island bounties posted!' ) ); };
+
+		for ( const b of this.journal.querySelectorAll( '[data-pick-lure]' ) ) b.onclick = () => {
+
+			s.setLure( b.dataset.pickLure );
+			this.game.toast( tr( LURES[ b.dataset.pickLure ].name ) );
+
+		};
+
+		for ( const b of this.journal.querySelectorAll( '[data-nav-lm]' ) ) b.onclick = () => {
+
+			const lm = LANDMARKS.find( ( x ) => x.id === b.dataset.navLm );
+			if ( lm && this.game.minimap ) {
+
+				this.game.minimap.setWaypoint( lm.x, lm.z, zh ? lm.nameZh : lm.nameEn );
+				this.toggleJournal( false );
+
+			}
+
+		};
+
+		const nr = this.journal.querySelector( '[data-nav-rally]' );
+		if ( nr ) nr.onclick = () => {
+
+			this.game.minimap?.setWaypoint( RALLY_GATES[ 0 ].x, RALLY_GATES[ 0 ].z, zh ? '越野赛起点' : 'Rally Start' );
+			this.toggleJournal( false );
+
+		};
+
+		const sr = this.journal.querySelector( '[data-start-rally]' );
+		if ( sr ) sr.onclick = () => {
+
+			const p = this.game.app?.player;
+			if ( p?.mode === 'vehicle' && p.activeVehicle ) {
+
+				this.game.rally?.start( p.activeVehicle.id );
+				this.toggleJournal( false );
+
+			} else {
+
+				this.game.toast( tr( 'Drive a motorcycle or buggy first (press E near vehicle)' ) );
+
+			}
+
+		};
 
 	}
 
@@ -437,6 +701,7 @@ export class GameHUD {
 		this.standOpen = true;
 		this.vendor = vendor;
 		this.toggleInventory( false );
+		this.toggleJournal( false );
 		if ( this.game.minimap ) this.game.minimap.toggleFull( false );
 		if ( vendor.kind === 'shop' ) this.renderShop();
 		else this.renderStand();
@@ -458,10 +723,12 @@ export class GameHUD {
 		const v = this.vendor || { name: 'Fish buyer' };
 		const zh = getLang() === 'zh';
 		const rows = s.inventory.map( ( f ) => `<div class="gm-row has-cm"><span>${ trFish( f.species, FISH[ f.species ].name ) }</span><span class="gm-cm">${ f.cm ?? Math.round( fishLengthCm( f.species, f.kg ) ) } cm</span><span class="gm-kg">${ f.kg.toFixed( 2 ) } kg</span><span class="gm-val">$${ f.value }</span><button class="gm-mini" data-sell="${ f.id }">${ tr( 'Sell' ) }</button></div>` ).join( '' );
+		const bRows = ( s.bounties || [] ).map( ( b ) => `<div>${ b.completed ? '✅' : '•' } ${ zh ? b.titleZh : b.titleEn } (${ b.progress }/${ b.target }) · +$${ b.reward }</div>` ).join( '' );
 		this.stand.innerHTML = `
 			<h2>${ tr( v.name ) }</h2>
 			<p class="gm-sub">${ s.inventory.length ? tr( v.greeting || 'Let\'s see what you caught.' ) : tr( v.idle || 'Come back when you\'ve got fish.' ) }</p>
 			<div class="gm-list">${ rows || `<div class="gm-empty">${ tr( 'Your cooler is empty.' ) }</div>` }</div>
+			${ bRows ? `<div class="gm-stand-bounties"><b>${ zh ? '乔的今日悬赏（完成即发奖金）：' : 'Today\'s Bounties (auto-paid):' }</b>${ bRows }</div>` : '' }
 			<div class="gm-foot"><button class="gm-btn is-ghost" data-close>${ tr( 'Leave (E)' ) }</button><button class="gm-btn" data-all ${ s.inventory.length ? '' : 'disabled' }>${ zh ? '全部出售' : 'Sell all' } · $${ s.holdValue }</button></div>`;
 		this.stand.querySelector( '[data-close]' ).onclick = () => this.closeStand();
 		this.stand.querySelector( '[data-all]' ).onclick = () => this.game.sellAll();
@@ -494,12 +761,20 @@ GameHUD.prototype.renderShop = function () {
 
 	const missing = s.stats.fuelL - s.fuelL;
 	const fuelRow = `<div class="gm-shop-row"><span>${ zh ? '船用柴油' : 'Diesel' } · $${ FUEL_PRICE.toFixed( 2 ) } / L<small>${ zh ? '油箱存量' : 'Tank' }：${ s.fuelL.toFixed( 0 ) } / ${ s.stats.fuelL } L</small></span>${ missing > 0.5 ? `<button class="gm-btn" data-fuel ${ s.money < FUEL_PRICE ? 'disabled' : '' }>${ zh ? '加满' : 'Fill' } · $${ s.refuelCost() }</button>` : `<span class="gm-have">${ tr( 'Full' ) }</span>` }</div>`;
+	const curBoatPaint = this.game.app?.boat?.paintId || 'classic';
+	const paintBtns = BOAT_PAINT_IDS.map( ( pid ) => {
+
+		const active = pid === curBoatPaint;
+		return `<button class="gm-mini" data-boat-paint="${ pid }" style="${ active ? 'border-color:var(--tw-aqua);color:var(--tw-aqua)' : '' }">${ tr( BOAT_PAINTS[ pid ].label ) }</button>`;
+
+	} ).join( ' ' );
+	const boatRow = `<div class="gm-shop-row"><span>${ zh ? '渔船涂装改装（免费切换）' : 'Boat Hull Paint (Free)' }<small>${ zh ? '当前' : 'Now' }：${ tr( ( BOAT_PAINTS[ curBoatPaint ] || BOAT_PAINTS.classic ).label ) }</small></span><span style="display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end;max-width:56%">${ paintBtns }</span></div>`;
 	const sec = ( key ) => `<div class="gm-shop-sec">${ tr( key ) }</div>`;
 	const content = [
 		sec( 'Fishing gear' ),
 		renderRow( 'line' ), renderRow( 'reel' ), renderRow( 'rod' ),
 		sec( 'Boat upgrades' ),
-		fuelRow, renderRow( 'hold' ), renderRow( 'fuel' ), renderRow( 'engine' ), renderRow( 'fishFinder' ), renderRow( 'lights' ),
+		fuelRow, boatRow, renderRow( 'hold' ), renderRow( 'fuel' ), renderRow( 'engine' ), renderRow( 'fishFinder' ), renderRow( 'lights' ),
 		sec( 'Land vehicle garage' ),
 		renderRow( 'vehTires' ), renderRow( 'vehEngine' ), renderRow( 'vehSuspension' ), renderRow( 'vehLights' ),
 	].join( '' );
@@ -510,6 +785,15 @@ GameHUD.prototype.renderShop = function () {
 		<div class="gm-foot"><span class="gm-sub">${ tr( 'Upgrades take effect at once' ) }</span><button class="gm-btn is-ghost" data-close>${ tr( 'Leave (E)' ) }</button></div>`;
 	this.stand.querySelector( '[data-close]' ).onclick = () => this.closeStand();
 	for ( const b of this.stand.querySelectorAll( '[data-buy]' ) ) b.onclick = () => this.game.buy( b.dataset.buy );
+	for ( const b of this.stand.querySelectorAll( '[data-boat-paint]' ) ) b.onclick = () => {
+
+		const id = b.dataset.boatPaint;
+		this.game.app?.boat?.setPaint?.( id );
+		this.game.app?.prefs?.save?.( { boatPaint: id } );
+		this.game.app?.ui?.syncFromApp?.();
+		this.renderShop();
+
+	};
 	const f = this.stand.querySelector( '[data-fuel]' );
 	if ( f ) f.onclick = () => this.game.refuel();
 

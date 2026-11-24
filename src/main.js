@@ -76,6 +76,7 @@ app.init( ( p, text, until ) => ui.setLoading( p, tr( text ), until ) ).then( as
 	app.ui = new AppUI( app, ui );
 	ui.setLoading( 1, tr( 'Ready' ) );
 	await ui.hideLoader();
+	app.showGpuAdvisoryToast?.();
 	// frame-time benchmark and reference shots (see core/Bench.js): it drives the frames itself
 	if ( app.qs.has( 'bench' ) ) {
 

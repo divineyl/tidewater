@@ -88,6 +88,18 @@ function f( x ) {
 
 }
 
+function hexToLinearVec3( hex, out = new Vector3() ) {
+
+	const c = ( v ) => {
+
+		v /= 255;
+		return v <= 0.04045 ? v / 12.92 : Math.pow( ( v + 0.055 ) / 1.055, 2.4 );
+
+	};
+	return out.set( c( ( hex >> 16 ) & 255 ), c( ( hex >> 8 ) & 255 ), c( hex & 255 ) );
+
+}
+
 export class BoatMaterials {
 
 	constructor( hullShape ) {
@@ -102,9 +114,18 @@ export class BoatMaterials {
 
 		// uniform handles ({ value }), as the TSL uniform() nodes were
 		this.navOn = this.glow.uniforms.navOn;
+		this.topsideColor = this.hull.uniforms.topsideColor;
+		this.stripeColor = this.hull.uniforms.stripeColor;
 		this.flagPivot = this.fittings.uniforms.flagPivot;
 		this.flagDir = this.fittings.uniforms.flagDir;
 		this.flagWind = this.fittings.uniforms.flagWind;
+
+	}
+
+	setHullPaint( topsideHex, stripeHex ) {
+
+		hexToLinearVec3( topsideHex, this.topsideColor.value );
+		hexToLinearVec3( stripeHex, this.stripeColor.value );
 
 	}
 
@@ -112,7 +133,13 @@ export class BoatMaterials {
 	// boat frame (the hull mesh sits at the root with an identity transform).
 	createHull( shape ) {
 
-		const m = physical( { roughness: 0.25, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.1, ...COMMON() } );
+		const m = physical( {
+			roughness: 0.25, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.1, ...COMMON(),
+			uniforms: {
+				topsideColor: [ 'vec3f', hexToLinearVec3( 0xf2efe6 ) ],
+				stripeColor: [ 'vec3f', hexToLinearVec3( 0x0f1a30 ) ],
+			},
+		} );
 		m.name = 'boatHull';
 
 		m.surface = /* wgsl */`
@@ -134,9 +161,9 @@ export class BoatMaterials {
 	let streakN = mx_noise_float3( vec3f( p.z * 7.0, p.y * 0.45, p.x * 7.0 ) );
 	let scuffN = mx_noise_float3( vec3f( p.z * 2.2, p.y * 34.0, p.x * 2.2 ) );
 
-	var c = mix( ${ col( 0x7a1d15 ) }, ${ col( 0x0f1a30 ) }, aboveBottom );
-	c = mix( c, ${ col( 0xf2efe6 ) }, aboveStripe );
-	c = mix( c, ${ col( 0x0f1a30 ) }, cove );
+	var c = mix( ${ col( 0x7a1d15 ) }, mat.stripeColor, aboveBottom );
+	c = mix( c, mat.topsideColor, aboveStripe );
+	c = mix( c, mat.stripeColor, cove );
 
 	// waterline scum on the white, algae on the antifouling just below the boot top
 	let scum = boatInvstep( 0.16, n1 * 0.09 + 0.42, boot ) * aboveStripe * sat( n1 * 0.6 + 0.7 );

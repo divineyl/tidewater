@@ -31,9 +31,21 @@ export const FISH = {
 	tuna: { name: 'Blackfin tuna', sci: 'Thunnus atlanticus', lw: [ 0.0145, 3.0 ], model: 'tuna', habitat: { deep: 1 }, kg: [ 3, 14 ], price: 16, fight: 0.85, stamina: 16, time: 'dawnDusk', rarity: 0.5 },
 	mahi: { name: 'Mahi-mahi', sci: 'Coryphaena hippurus', lw: [ 0.0079, 3.0 ], model: 'mahi', habitat: { deep: 0.8 }, kg: [ 4, 18 ], price: 14, fight: 0.8, stamina: 15, time: 'day', rarity: 0.4 },
 	tarpon: { name: 'Tarpon', sci: 'Megalops atlanticus', lw: [ 0.0077, 3.02 ], model: 'tarpon', habitat: { pier: 0.35, bay: 0.5, shallows: 0.15 }, kg: [ 10, 45 ], price: 4, fight: 1, stamina: 24, time: 'night', rarity: 0.2 },
+	goldenTrevally: { name: 'Golden trevally', sci: 'Gnathanodon speciosus', lw: [ 0.019, 2.95 ], model: 'jack', habitat: { reef: 1, pier: 0.45, bay: 0.25 }, kg: [ 4, 18 ], price: 24, fight: 0.82, stamina: 15, time: 'dawnDusk', rarity: 0.28, legendary: true, condition: 'reef_golden' },
+	sailfish: { name: 'Atlantic sailfish', sci: 'Istiophorus albicans', lw: [ 0.010, 2.92 ], model: 'mahi', habitat: { deep: 1, bay: 0.35 }, kg: [ 12, 42 ], price: 22, fight: 0.92, stamina: 20, time: 'dawnDusk', rarity: 0.26, legendary: true, condition: 'pelagic_sail' },
+	blueMarlin: { name: 'Blue marlin', sci: 'Makaira nigricans', lw: [ 0.013, 2.95 ], model: 'tuna', habitat: { deep: 1 }, kg: [ 18, 65 ], price: 28, fight: 0.98, stamina: 25, time: 'any', rarity: 0.24, legendary: true, condition: 'storm_boss' },
 };
 
 export const FISH_IDS = Object.keys( FISH );
+
+export const LURES = Object.freeze( {
+	standard: { id: 'standard', name: 'All-Purpose Lure', desc: 'Balanced bite rate across all waters.' },
+	reefJig: { id: 'reefJig', name: 'Reef Metal Jig', desc: 'Attracts reef snappers, groupers & Golden Trevally.' },
+	liveBait: { id: 'liveBait', name: 'Offshore Live Bait', desc: 'Boosts trophy size and attracts pelagic predators & Sailfish.' },
+	stormLure: { id: 'stormLure', name: 'Heavy Storm Plug', desc: 'Cuts through rough swell to lure Blue Marlin & Sailfish.' },
+} );
+
+export const LURE_IDS = Object.keys( LURES );
 
 // $ value of a fish; trophy-sized ones fetch a bit more per kg
 export function fishValue( id, kg ) {

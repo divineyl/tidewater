@@ -2010,6 +2010,12 @@ export class UI {
 		this.onPhotoZoom = null; // ( deltaDeg ) triggered on [ / ] / 0 or zoom buttons in photo mode
 		this.onPhotoPostcardToggle = null; // ( on ) postcard watermark toggled in photo mode
 		this.photoPostcard = true;
+		this.onQualityPreset = null; // ( presetId ) quality tier picked from start screen
+		this.qualityPreset = 'high';
+		this.onOpenJournal = null;
+		this.onEmoteSend = null;
+		this.onChatSend = null; // ( text ) chat message sent from HUD box
+		this._mpStatus = { status: 'offline', peerCount: 0 };
 		this.onPanelInteract = null; // ( event ) pointerdown on the settings panel or rail
 		this.onPanelToggle = null; // ( open )
 		this.onHelpToggle = null; // ( open )
@@ -2042,8 +2048,9 @@ export class UI {
 
 		const hud = this.hud = h( 'div', 'tw-hud' );
 
-		// top-left: frame rate, then brand + traversal mode
+		// top-left: frame rate + quick quality button, then brand + traversal mode
 		const tl = h( 'div', 'tw-tl' );
+		const tlTop = h( 'div', 'tw-tl-top' );
 		const stats = this.statsEl = h( 'div', 'tw-stats tw-glass', { 'data-level': 'good', 'aria-hidden': 'true' } );
 		stats.innerHTML = `
 			<div class="tw-stats-main"><span class="tw-fps">--</span><span class="tw-fps-unit">fps</span></div>
@@ -2058,6 +2065,45 @@ export class UI {
 		this.gpuKv = stats.querySelector( '.tw-kv-gpu' );
 		this.sparkEl = stats.querySelector( '.tw-spark' );
 
+		const qualityPill = this.qualityPillEl = h( 'button', 'tw-quality-pill tw-glass tw-interactive', {
+			type: 'button',
+			'aria-label': tr( 'Graphics quality' ),
+		} );
+		qualityPill.innerHTML = `${ icon( 'layers', 'tw-qp-ico' ) }<span class="tw-qp-txt"></span>`;
+		qualityPill.addEventListener( 'click', ( e ) => {
+
+			e.stopPropagation();
+			this.togglePanel( true );
+			this.selectTab( 'performance' );
+
+		} );
+
+		const mpPill = this.mpPillEl = h( 'button', 'tw-mp-pill tw-glass tw-interactive', {
+			type: 'button',
+			'aria-label': tr( 'Multiplayer' ),
+		} );
+		mpPill.innerHTML = `${ icon( 'users', 'tw-qp-ico' ) }<span class="tw-mp-txt"></span>`;
+		mpPill.addEventListener( 'click', ( e ) => {
+
+			e.stopPropagation();
+			this.togglePanel( true );
+			this.selectTab( 'multiplayer' );
+
+		} );
+
+		const journalPill = this.journalPillEl = h( 'button', 'tw-journal-pill tw-glass tw-interactive', {
+			type: 'button',
+			'aria-label': tr( 'Journal (J)' ),
+		} );
+		journalPill.innerHTML = `${ icon( 'compass', 'tw-qp-ico' ) }<span class="tw-jr-txt"></span>`;
+		journalPill.addEventListener( 'click', ( e ) => {
+
+			e.stopPropagation();
+			callHook( this.onOpenJournal );
+
+		} );
+		tlTop.append( stats, qualityPill, mpPill, journalPill );
+
 		const brand = h( 'div', 'tw-brand' );
 		brand.innerHTML = `${ brandMark() }<span class="tw-brand-name">TIDEWATER</span>`;
 		this.modeEl = h( 'div', 'tw-mode is-empty', { role: 'status' } );
@@ -2070,7 +2116,9 @@ export class UI {
 		this.weatherText = h( 'span', 'tw-weather-text' );
 		this.weatherEl.append( this.weatherIco, this.weatherText );
 		brand.append( this.weatherEl );
-		tl.append( stats, brand );
+		tl.append( tlTop, brand );
+		this._syncQualityUI();
+		this._syncMultiplayerPill();
 
 		// top-centre: notifications
 		this.toastsEl = h( 'div', 'tw-toasts', { 'aria-live': 'polite' } );
@@ -2098,7 +2146,48 @@ export class UI {
 		this.depthNum = this.depthEl.querySelector( '.tw-depth-num' );
 		this.depthLab = this.depthEl.querySelector( '.tw-g-lab' );
 
-		hud.append( tl, this.promptEl, this.boatEl, this.vehicleEl, this.depthEl );
+		this.nameplatesEl = h( 'div', 'tw-nameplates', { 'aria-hidden': 'true' } );
+		this.tourneyEl = h( 'div', 'tw-tourney tw-glass', { hidden: true } );
+		this.chatEl = h( 'div', 'tw-chat tw-glass tw-interactive', { hidden: true } );
+		this.chatEl.innerHTML = `
+			<div class="tw-chat-log" role="log" aria-live="polite"></div>
+			<div class="tw-chat-emotes">
+				<button type="button" class="tw-emote-btn" data-emote="wave" title="Wave">👋</button>
+				<button type="button" class="tw-emote-btn" data-emote="cheer" title="Cheer">🎉</button>
+				<button type="button" class="tw-emote-btn" data-emote="boat_horn" title="Horn">📯</button>
+				<button type="button" class="tw-emote-btn" data-emote="gather" title="Gather">📍</button>
+			</div>
+			<form class="tw-chat-form">
+				<input type="text" class="tw-chat-input" maxlength="160" />
+				<button type="submit" class="tw-chat-send"></button>
+			</form>`;
+		this.chatLogEl = this.chatEl.querySelector( '.tw-chat-log' );
+		this.chatInputEl = this.chatEl.querySelector( '.tw-chat-input' );
+		this.chatSendBtn = this.chatEl.querySelector( '.tw-chat-send' );
+		this._syncChatLocale();
+		for ( const eb of this.chatEl.querySelectorAll( '[data-emote]' ) ) {
+
+			eb.addEventListener( 'click', ( e ) => {
+
+				e.stopPropagation();
+				callHook( this.onEmoteSend, eb.dataset.emote );
+
+			} );
+
+		}
+		this.chatEl.querySelector( '.tw-chat-form' ).addEventListener( 'submit', ( e ) => {
+
+			e.preventDefault();
+			e.stopPropagation();
+			const val = this.chatInputEl.value.trim();
+			if ( ! val ) return;
+			this.chatInputEl.value = '';
+			callHook( this.onChatSend, val );
+
+		} );
+		this.chatInputEl.addEventListener( 'keydown', ( e ) => e.stopPropagation() );
+
+		hud.append( this.nameplatesEl, this.tourneyEl, tl, this.promptEl, this.boatEl, this.vehicleEl, this.depthEl, this.chatEl );
 
 		// photo mode toolbar: zoom, postcard toggle, capture (F2), exit (P)
 		this.photoHint = h( 'div', 'tw-photo-hint tw-interactive' );
@@ -2393,20 +2482,24 @@ export class UI {
 					<section>
 						<h3>${ esc( tr( 'Interaction & Tools' ) ) }</h3>
 						${ row( k( 'E' ), `${ esc( tr( 'Interact' ) ) }<small>${ esc( tr( 'Board, helm, ride bike, trade' ) ) }</small>` ) }
+						${ row( k( 'X' ), esc( tr( 'Board friend\'s boat or buggy (Multiplayer)' ) ) ) }
 						${ row( k( 'V' ), `${ esc( tr( 'Vehicle camera' ) ) }<small>${ esc( tr( '1st / 3rd person (boat & bike)' ) ) }</small>` ) }
 						${ row( k( 'R' ), `${ esc( tr( 'Fishing rod / Recover bike' ) ) }<small>${ esc( tr( 'Upright or rescue from water' ) ) }</small>` ) }
+						${ row( k( 'B' ), esc( tr( 'Cycle fishing lures' ) ) ) }
 						${ row( k( 'LMB' ), `${ esc( tr( 'Cast, strike, reel' ) ) }<small>${ esc( tr( 'Hold to wind up / reel' ) ) }</small>` ) }
 						${ row( k( 'RMB' ), esc( tr( 'Reel in an empty line' ) ) ) }
 						${ row( k( 'I' ), esc( tr( 'Cooler and fish log' ) ) ) }
 						${ row( k( 'F' ), esc( tr( 'Free camera' ) ) ) }
 						${ row( k( 'T' ), esc( tr( 'Pause time' ) ) ) }
 						${ row( k( 'L' ), esc( tr( 'Flashlight / Headlight' ) ) ) }
-						${ row( k( 'G' ), esc( tr( 'Bike horn' ) ) ) }
+						${ row( k( 'G' ), esc( tr( 'Horn / Wave emote' ) ) ) }
+						${ row( k( 'U' ), esc( tr( 'Start East Headland rally (in vehicle)' ) ) ) }
 						${ row( k( 'M' ), esc( tr( 'Mute' ) ) ) }
 					</section>
 					<section>
 						<h3>${ esc( tr( 'Interface' ) ) }</h3>
 						${ row( k( 'H' ), esc( tr( 'Settings panel' ) ) ) }
+						${ row( k( 'J' ), esc( tr( 'Island Journal (Bounties / Lures / Rally)' ) ) ) }
 						${ row( k( 'N' ), `${ esc( tr( 'Island map' ) ) }<small>${ esc( tr( 'Expand map & set navigation waypoint' ) ) }</small>` ) }
 						${ row( k( 'P' ), `${ esc( tr( 'Photo mode' ) ) }<small>${ esc( tr( 'Hides all interface · F2 capture · [ ] zoom' ) ) }</small>` ) }
 						${ row( k( 'F2' ) + k( '[' ) + k( ']' ), `${ esc( tr( 'Photo capture & zoom' ) ) }<small>${ esc( tr( 'In photo mode: F2 save PNG, [ ] zoom FOV' ) ) }</small>` ) }
@@ -2436,11 +2529,24 @@ export class UI {
 
 		const el = this.startEl;
 		if ( ! el ) return;
+		const presets = [
+			[ 'potato', 'Smooth' ],
+			[ 'eco', 'Eco' ],
+			[ 'balanced', 'Balanced' ],
+			[ 'high', 'High' ],
+			[ 'ultra', 'Ultra' ],
+		];
 		el.innerHTML = `
 			<div class="tw-start-inner">
 				${ brandMark( 'tw-start-mark' ) }
 				<div class="tw-start-title">TIDEWATER</div>
 				<button type="button" class="tw-start-cta"><span class="tw-start-pulse" aria-hidden="true"></span>${ icon( 'mouse' ) }<span>${ esc( tr( 'Click to explore' ) ) }</span></button>
+				<div class="tw-start-quality">
+					<span class="tw-sq-label">${ esc( tr( 'Graphics quality' ) ) }</span>
+					<div class="tw-sq-list" role="group" aria-label="${ esc( tr( 'Graphics quality' ) ) }">
+						${ presets.map( ( [ id, raw ] ) => `<button type="button" class="tw-sq-btn" data-quality="${ id }">${ esc( tr( raw ) ) }</button>` ).join( '' ) }
+					</div>
+				</div>
 				<div class="tw-start-keys">
 					<span><span class="tw-wasd"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>${ esc( tr( 'Move' ) ) }</span>
 					<span><kbd class="tw-kbd-ico">${ icon( 'mouse' ) }</kbd>${ esc( tr( 'Look' ) ) }</span>
@@ -2449,6 +2555,19 @@ export class UI {
 					<span><kbd>F1</kbd>${ esc( tr( 'All controls' ) ) }</span>
 				</div>
 			</div>`;
+		el.querySelectorAll( '[data-quality]' ).forEach( ( b ) => {
+
+			b.addEventListener( 'click', ( e ) => {
+
+				e.stopPropagation();
+				const id = b.dataset.quality;
+				this.setQualityPreset( id );
+				callHook( this.onQualityPreset, id );
+
+			} );
+
+		} );
+		this._syncQualityUI();
 
 	}
 
@@ -2457,7 +2576,7 @@ export class UI {
 	_bindGlobal() {
 
 		const signal = this._ac.signal;
-		for ( const el of [ this.panel, this.rail, this.helpEl, this.startEl, this.photoHint ] ) this._isolate( el );
+		for ( const el of [ this.panel, this.rail, this.helpEl, this.startEl, this.photoHint, this.chatEl ] ) this._isolate( el );
 
 		const interact = ( e ) => {
 
@@ -3550,6 +3669,151 @@ export class UI {
 
 	}
 
+	setQualityPreset( id ) {
+
+		this.qualityPreset = id || 'high';
+		this._syncQualityUI();
+
+	}
+
+	_syncQualityUI() {
+
+		const LABEL_MAP = {
+			potato: 'Smooth',
+			eco: 'Eco',
+			balanced: 'Balanced',
+			high: 'High',
+			ultra: 'Ultra',
+			custom: 'Custom',
+		};
+		const cur = LABEL_MAP[ this.qualityPreset ] || 'High';
+		if ( this.qualityPillEl ) {
+
+			this.qualityPillEl.setAttribute( 'aria-label', tr( 'Graphics quality' ) );
+			this.qualityPillEl.dataset.quality = this.qualityPreset;
+			const txt = this.qualityPillEl.querySelector( '.tw-qp-txt' );
+			if ( txt ) txt.textContent = `${ tr( 'Graphics' ) } · ${ tr( cur ) }`;
+
+		}
+
+		if ( this.startEl ) {
+
+			this.startEl.querySelectorAll( '[data-quality]' ).forEach( ( b ) => {
+
+				const active = b.dataset.quality === this.qualityPreset;
+				b.classList.toggle( 'is-active', active );
+				b.setAttribute( 'aria-pressed', String( active ) );
+
+			} );
+
+		}
+
+	}
+
+	setMultiplayerStatus( summary ) {
+
+		this._mpStatus = summary || { status: 'offline', peerCount: 0 };
+		this._syncMultiplayerPill();
+		if ( this.chatEl ) this.chatEl.hidden = this._mpStatus.status !== 'connected';
+
+	}
+
+	_syncMultiplayerPill() {
+
+		if ( this.journalPillEl ) {
+
+			this.journalPillEl.setAttribute( 'aria-label', tr( 'Journal (J)' ) );
+			const jTxt = this.journalPillEl.querySelector( '.tw-jr-txt' );
+			if ( jTxt ) jTxt.textContent = tr( 'Journal' );
+
+		}
+
+		if ( ! this.mpPillEl ) return;
+		const st = this._mpStatus || { status: 'offline', peerCount: 0 };
+		this.mpPillEl.classList.toggle( 'is-online', st.status === 'connected' );
+		this.mpPillEl.setAttribute( 'aria-label', tr( 'Multiplayer' ) );
+		const txt = this.mpPillEl.querySelector( '.tw-mp-txt' );
+		if ( txt ) {
+
+			if ( st.status === 'connected' ) {
+
+				const total = ( st.peerCount || 0 ) + 1;
+				txt.textContent = getLang() === 'zh' ? `联机 · ${ total }人` : `Online · ${ total }`;
+
+			} else if ( st.status === 'connecting' ) {
+
+				txt.textContent = tr( 'Connecting' );
+
+			} else {
+
+				txt.textContent = tr( 'Multiplayer' );
+
+			}
+
+		}
+
+	}
+
+	_syncChatLocale() {
+
+		if ( this.chatInputEl ) this.chatInputEl.placeholder = tr( 'Type chat message…' );
+		if ( this.chatSendBtn ) this.chatSendBtn.textContent = tr( 'Send' );
+
+	}
+
+	setTournamentState( summary ) {
+
+		if ( ! this.tourneyEl ) return;
+		if ( ! summary || ! summary.active ) {
+
+			this.tourneyEl.hidden = true;
+			return;
+
+		}
+
+		const s = Math.max( 0, Math.ceil( summary.remainingSec || 0 ) );
+		const mm = String( Math.floor( s / 60 ) ).padStart( 2, '0' );
+		const ss = String( s % 60 ).padStart( 2, '0' );
+		const zh = getLang() === 'zh';
+		const rowsHtml = ( summary.rows || [] ).slice( 0, 5 ).map( ( r, idx ) => {
+
+			const val = summary.mode === 'biggestKg'
+				? `${ r.biggestKg.toFixed( 2 ) } kg`
+				: summary.mode === 'speciesCount'
+					? ( zh ? `${ r.speciesCount } 种` : `${ r.speciesCount } sp` )
+					: `${ r.totalKg.toFixed( 2 ) } kg`;
+			return `<div class="tw-t-row"><span>${ idx + 1 }. <i style="background:${ esc( r.color ) }"></i>${ esc( r.name ) }</span><b>${ val }</b></div>`;
+
+		} ).join( '' );
+		this.tourneyEl.hidden = false;
+		this.tourneyEl.innerHTML = `<div class="tw-t-head"><span>🏆 ${ esc( tr( `tourney_${ summary.mode }` ) ) }</span><b>${ mm }:${ ss }</b></div>${ rowsHtml }`;
+
+	}
+
+	pushChatMessage( entry ) {
+
+		if ( ! this.chatLogEl || ! entry || ! entry.text ) return;
+		const row = h( 'div', `tw-chat-row is-${ entry.kind || 'chat' }` );
+		if ( entry.kind === 'chat' ) {
+
+			const author = h( 'span', 'tw-chat-author', { text: `${ entry.name }: ` } );
+			author.style.color = entry.color || '#5ce0d2';
+			const body = h( 'span', 'tw-chat-body', { text: entry.text } );
+			row.append( author, body );
+
+		} else {
+
+			row.textContent = entry.text;
+			if ( entry.color && entry.kind === 'catch' ) row.style.color = entry.color;
+
+		}
+
+		this.chatLogEl.append( row );
+		while ( this.chatLogEl.children.length > 30 ) this.chatLogEl.firstChild.remove();
+		this.chatLogEl.scrollTop = this.chatLogEl.scrollHeight;
+
+	}
+
 	flashShutter() {
 
 		if ( ! this.shutterEl ) return;
@@ -3602,6 +3866,9 @@ export class UI {
 
 		this._populateHelp();
 		this._populateStart();
+		this._syncQualityUI();
+		this._syncMultiplayerPill();
+		this._syncChatLocale();
 		for ( const tab of this.tabs.values() ) tab.relocalize?.();
 		this._mode = null;
 		this._weatherText = null;

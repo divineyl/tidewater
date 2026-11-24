@@ -15,7 +15,8 @@
 ## 运行环境要求 / Requirements
 
 - **浏览器 / Browser:** 支持 WebGPU 的现代桌面浏览器（Chrome / Edge 113+ 或 Safari），请在浏览器设置中开启「图形/硬件加速」。
-- **显卡 / GPU:** 推荐独立显卡或较新的集成显卡；内置 `省电 / 均衡 / 高清 / 电影` 4 档画质预设与动态渲染缩放。
+- **桌面客户端 / Windows Desktop:** 提供免配置独立版 `Tidewater-Win64`（基于 Electron，开箱支持 WebGPU、本地存档目录与局域网开房）。
+- **显卡 / GPU:** 推荐独立显卡或较新的集成显卡；内置 `流畅 / 省电 / 均衡 / 高清 / 电影` 5 档“零马赛克”画质预设、动态分辨率与启动显卡自动识别（防双显卡误跑核显提醒）。
 - **首次加载 / First Load:** 首次启动需编译数百个 WGSL 着色器，可能需要 30 秒～2 分钟；后续访问将由浏览器缓存加速。
 
 ---
@@ -35,7 +36,14 @@
 - **钓鱼经济 × 载具改装联动：** 玛塔商店新增 `陆地载具改装` 区块，可将海钓收入用于升级 **全地形轮胎**（大幅减沙地阻力、增强湿滑抓地）、**陆地动力套件**（极速与扭矩暴涨）、**越野悬挂与涉水喉**（加强爬坡并显著提升深水耐受防熄火）、**车顶 LED 探照灯条**（夜间与暴风雨亮度/射程强化）。
 - **东岬景区公路 & 观景灯塔：** 新增通往东岬高地的平缓海景砂土盘山路与宏伟海边灯塔（含楼梯平台可攀爬、旋转菲涅尔透镜与双侧体积光柱）。
 - **地面脚印/车辙交互与 3D 信标地图导航：** 实时动态记录人物脚印、四轮沙土车辙与草地倒伏；按 `N` 展开全岛高德风导航地图点击标注目标，场景天际升起高空青色导航光柱并伴随方位测距。
-- **双语本地化、便捷设置与手柄支持：** 完整简体中文 / English 实时切换；支持鼠标视角灵敏度、Y 轴反转、4 路音频分轨音量、一键导出/导入 JSON 完整存档；支持 **6 款车身涂装与 3 种车灯色温切换**、**体积头灯光锥**（夜雨穿透效果）及**沙丘飞跃滞空特技播报**；纯净拍照模式新增**明信片水印开关**（叠加时间/天气/破纪录渔获）；内置在线贴图减重 **18 MB+** 与 Vite 分包提速，修复 Pointer Lock 视角突发跳变，支持 Xbox / PlayStation 手柄即插即用。
+- **双语本地化、便捷设置与手柄支持：** 完整简体中文 / English 实时切换；支持鼠标视角灵敏度、Y 轴反转、4 路音频分轨音量 + **海岛轻音乐电台**、一键导出/导入 JSON 完整存档；支持 **6 款陆地车身涂装 + 6 款渔船船体涂装与自定义船名**、**3 种车灯色温与体积光锥**及**沙丘飞跃滞空特技播报**；纯净拍照模式新增**明信片水印开关**（叠加时间/天气/破纪录渔获）；内置在线贴图减重 **18 MB+**、纯离线系统字体启动与 Vite 分包提速，支持 Xbox / PlayStation 手柄即插即用。
+- **独立 Windows 桌面端（`desktop/`）：** 基于 Electron 原生封装 `Tidewater.exe`，程序目录自带 `save-data/` 便携存档，裁剪冗余语言包立省 47 MB+，支持一键在桌面生成快捷方式（本体仍留在非系统盘）。
+- **双模式多人联机与共乘钓鱼赛（`src/net/`）：** 支持 **4 位房间码 P2P 直连（网页/桌面互通）** 与 **桌面端内建 WebSocket 局域网 / Tailscale / ZeroTier 房主**；实时同步 3D 人物与载具外观/车灯/渔船涂装、远端抛竿浮漂鱼线与获鱼展示、地图好友坐标、昼夜天气、房间聊天、快捷互动表情（挥手/欢呼/鸣笛/集合），支持 **按 `X` 登上好友渔船甲板或越野车副驾**，并内置 **房主可控限时联机钓鱼赛排行榜**。
+- **低配“零马赛克”深度优化（针对 GTX 1050 Ti / 核显）：** 修正 TAAU 放大抖动相位与缩放尺度（低配保持 85%+ 清晰度与 8× TAA），配合硬件 5-tap PCF 级联交错阴影、6+2 步 Fast SSR 水面反射、低配体积云抽帧、隔帧水下光照、距离自适应岸边浪场抽样及近距植物阴影剔除，告别方块马赛克同时流畅运行。
+- **海岛手账、每日悬赏、拟饵鱼王与越野计时赛（`J`）：**
+  - **乔的每日悬赏订单：** 实时追踪珊瑚礁订单、大鱼悬赏、深海急单与风雨传奇挑战，完成即自动发奖金；
+  - **4 种拟饵（`B`）与 3 条传奇鱼王：** 在原本 18 种加勒比鱼类之外新增 `黄金鲹`、`太平洋旗鱼` 与风暴霸主 `蓝枪鱼`；
+  - **8 处海岛明信片打卡点 & 东岬越野计时赛（`U`）：** 沿东岬盘山公路设 10 个发光检查点与金/银/铜牌圈速榜，并记录拍照打卡与地标探索奖励。
 
 ---
 
@@ -49,12 +57,16 @@
 | `Space`（空格） | 跳跃 / 潜水上浮 / 陆地载具手刹漂移 |
 | `C` | 下潜（游泳状态） |
 | `E` | 交互：登船、掌舵、上岸、骑摩托/开越野车、与乔或玛塔对话 |
+| `X` | 多人联机共乘：登上好友渔船甲板一起海钓，或乘上好友越野车副驾 |
 | `V` | 切换第 1 / 第 3 人称视角（驾驶渔船或陆地载具时） |
 | `R` | 掏出/收起鱼竿；载具涉水熄火后救援复位至干地（或在车辆面板扶正） |
+| `B` | 切换随身拟饵（通用拟饵 / 礁石铁板 / 深海活饵 / 暴雨鱼王饵） |
 | `左键 LMB` | 按住蓄力松开抛竿 · 浮漂沉水（`!`）时点击提竿 · 按住收线 |
 | `右键 RMB` | 空钩收线 |
 | `L` | 开关载具前灯/车顶 LED 灯条，或开关随身手电筒 |
-| `G` | 陆地载具鸣笛（摩托车 / 越野车各自独立声效） |
+| `G` | 陆地载具或渔船鸣笛 · 步行时挥手打招呼（联机广播） |
+| `U` | 驾驶陆地载具时快速开启/重开东岬越野计时赛 |
+| `J` | 打开 / 关闭海岛手账（悬赏订单 · 拟饵鱼王 · 打卡点 · 越野计时赛） |
 | `N` | 打开 / 关闭全岛大地图并点击放置/取消导航信标 |
 | `I` / `Tab` | 打开冰桶鱼舱与鱼类图鉴 |
 | `H` | 展开 / 收起系统设置面板（天气、海况、画质、载具、语言切换） |
@@ -73,7 +85,7 @@ npm install
 # 启动本地开发服务器 / Start Vite dev server (http://127.0.0.1:5189)
 npm run dev
 
-# 运行全套 Node 自动化测试 / Run all 6 automated test suites
+# 运行全套 Node 自动化测试 / Run all 9 automated test suites
 npm test
 
 # 构建生产静态包 / Build static site into dist/
@@ -82,6 +94,10 @@ npm run build
 # 构建带启动脚本的离线便携目录与 ZIP（默认输出至 exports/，可通过环境变量 EXPORT_DIR 自定义）
 # Build portable bundle & ZIP (outputs to exports/ by default, or set EXPORT_DIR)
 npm run pack
+
+# 构建精简版独立 Windows 桌面端目录与 ZIP（Tidewater-Win64）
+# Build standalone Windows Desktop Edition & ZIP
+npm run pack:desktop
 ```
 
 ---
@@ -112,6 +128,10 @@ An island fishing and coastal exploration game for the browser running directly 
 - **East Headland Road, Lighthouse & Waypoints (`src/world/Lighthouse.js`, `src/game/Minimap.js`, `src/fx/WaypointBeacon.js`):** Graded coastal road to East Headland Lighthouse, expandable full-island map (`N`), and 3D cyan light-pillar waypoint navigation.
 - **Bilingual UI, Gamepad, Liveries, Presets & Camera Fixes:** Simplified Chinese / English localization (`src/i18n/`), `localStorage` persistence + JSON save export/import (`src/core/Prefs.js`), mouse sensitivity & Y-axis invert, 4-bus audio mixer, customizable vehicle paint liveries & volumetric headlight cones, jump-airtime stunt telemetry, photo postcard watermarks, ~18 MB lighter compressed online textures (`scripts/optimize-assets.mjs`), pointer-lock spike filtering (`src/core/Input.js`), and GitHub Pages + portable bundle packaging (`scripts/pack-portable.mjs`).
 
+- **Desktop Client & Dual-Mode Co-op Multiplayer (`desktop/`, `src/net/`):** Standalone Windows `Tidewater.exe` with portable `save-data/` & locale pruning; P2P room codes + built-in LAN WebSocket relay, 3D remote avatars & boat/vehicle liveries, remote casting lines/bobbers, co-op boarding (`X`), quick emotes (`G`), and host-managed timed fishing tournaments.
+- **Zero-Mosaic Low-Spec Optimizations & GPU Smart Detect:** Scaled TAAU jitter phases/resolution (85%+ crisp internal res), fast PCF cascaded shadows, Fast SSR water, tiered clouds, staggered underwater lighting, automatic GPU classification, and discrete-GPU advisory prompts.
+- **Gameplay Expansion:** Boat hull liveries & custom boat name, 4 fishing lures (`B`), 3 legendary boss fish (`goldenTrevally`, `sailfish`, `blueMarlin`), daily fishing bounties, 8 scenic postcard viewpoints, East Headland 10-gate rally time trial (`U`), Island Journal (`J`), and optional Island Ambient Radio.
+
 Every push to `main` runs `npm test && npm run build` and deploys to GitHub Pages via `.github/workflows/deploy.yml`.
 
 ---
@@ -134,8 +154,10 @@ Every push to `main` runs `npm test && npm run build` and deploys to GitHub Page
 | `src/audio/` | 基于 Web Audio 与实录采样/合成的立体声效与车辆/雷雨声场 |
 | `src/i18n/` | 简体中文 / English 完整词典与实时语言切换系统 |
 | `src/ui/` | 毛玻璃设置面板、载屏、快捷帮助、拍照模式与双语 HUD |
-| `scripts/` | `optimize-assets.mjs` 在线贴图压缩与 `pack-portable.mjs` 离线便携构建脚本 |
-| `test/` | 7 组 Node 无头自动化单元测试（钓鱼、载具物理、天气地图、改装、双语、视角与灵敏度） |
+| `src/net/` | 双模式多人联机协议、P2P/局域网连接管理、远端三维形象与联机钓鱼赛 |
+| `desktop/` | Windows 独立 Electron 桌面端入口、预加载桥接与内建 WebSocket 服务器 |
+| `scripts/` | `optimize-assets.mjs` 贴图压缩、`pack-portable.mjs` 便携打包与 `pack-desktop.mjs` 桌面打包 |
+| `test/` | 9 组 Node 无头自动化单元测试（钓鱼、载具、联机、显卡分类、悬赏、计时赛等） |
 | `tools/` | 角色、摊位扫描资源与音频拉取转换工具 |
 
 ---

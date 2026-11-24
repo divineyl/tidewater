@@ -1,6 +1,6 @@
 import { Vector3, Color } from '../engine/index.js';
 import { WORLD } from '../world/WorldLayout.js';
-import { FISH } from './FishTable.js';
+import { FISH, LURES, LURE_IDS } from './FishTable.js';
 import { habitatAt, pickSpecies, rollWeight, biteDelay } from './Bites.js';
 import { CatchMinigame } from './CatchMinigame.js';
 import { GameState } from './GameState.js';
@@ -12,6 +12,9 @@ import { UPGRADES, fuelBurn } from './Gear.js';
 import { GameHUD } from './GameHUD.js';
 import { Minimap } from './Minimap.js';
 import { Guide } from './Guide.js';
+import { applyCatchToBounties } from './Bounties.js';
+import { checkLandmarkDiscovery } from './Landmarks.js';
+import { RallyCourse, RALLY_GATES } from './RallyCourse.js';
 import { getLang, tr, trFish, trUpgradeName, trUpgradeLabel } from '../i18n/i18n.js';
 
 // how long the catch card stays up unless dismissed (ms)
@@ -54,6 +57,8 @@ export class Game {
 		this._hookedSpecies = null;
 		this._pier = WORLD.pier;
 		this._tmp = new Vector3();
+		this._exploreT = 0;
+		this.rally = new RallyCourse( { scene: app.scene, terrain: app.terrainData } );
 		this.applyGear();
 		this.state.onChange( () => this.applyGear() );
 
@@ -144,7 +149,8 @@ export class Game {
 	get canFish() {
 
 		const app = this.app, p = app.player;
-		return ! app.freeCam && ( p.mode === 'walk' || p.mode === 'deck' ) && ! ( app.ui && app.ui.ui && app.ui.ui._photo );
+		const aboardCoopBoat = p.mode === 'coop' && p.coop?.kind === 'boat';
+		return ! app.freeCam && ( p.mode === 'walk' || p.mode === 'deck' || aboardCoopBoat ) && ! ( app.ui && app.ui.ui && app.ui.ui._photo );
 
 	}
 
@@ -161,6 +167,7 @@ export class Game {
 			this.minimap = new Minimap( ui.hud || ui.root, this );
 			this.guide = new Guide( ui, this, this.minimap );
 			ui.onReplayGuide = () => this.guide.replay();
+			ui.onOpenJournal = () => this.hud?.toggleJournal();
 
 		}
 
@@ -168,7 +175,7 @@ export class Game {
 		const photo = !! ( ui && ui._photo );
 		const uiBlocked = !! ( ui && ( ui._start || ui._help ) );
 		const guideOpen = !! ( this.guide && this.guide.open );
-		const panelOpen = ( this.hud && ( this.hud.invOpen || this.hud.standOpen ) ) || ( this.minimap && this.minimap.fullOpen );
+		const panelOpen = ( this.hud && ( this.hud.invOpen || this.hud.standOpen || this.hud.journalOpen ) ) || ( this.minimap && this.minimap.fullOpen );
 
 		const can = this.canFish;
 		if ( inp.hit( 'KeyR' ) && can && ! this.fight && ! panelOpen && ! uiBlocked && ! guideOpen ) {
@@ -176,6 +183,24 @@ export class Game {
 			rod.equip( ! rod.equipped );
 			if ( ! rod.equipped ) this.cancelLine();
 			this.toast( tr( rod.equipped ? 'Rod out · hold left mouse to cast' : 'Rod away' ), 1600 );
+
+		}
+
+		if ( inp.hit( 'KeyB' ) && can && ! this.fight && ! panelOpen && ! uiBlocked && ! guideOpen ) {
+
+			const idx = LURE_IDS.indexOf( this.state.lure );
+			const nextId = LURE_IDS[ ( idx + 1 ) % LURE_IDS.length ];
+			this.state.setLure( nextId );
+			const spec = LURES[ nextId ];
+			this.toast( `${ tr( spec.name ) } · ${ tr( spec.desc ) }`, 2400 );
+
+		}
+
+		if ( inp.hit( 'KeyU' ) && p.mode === 'vehicle' && p.activeVehicle && ! panelOpen && ! uiBlocked && ! guideOpen && ! photo ) {
+
+			this.rally.start( p.activeVehicle.id );
+			app.audio?.uiChime?.( 'checkpoint' );
+			this.toast( tr( 'Rally started! Follow the glowing gates to the lighthouse' ), 2600 );
 
 		}
 
@@ -190,6 +215,7 @@ export class Game {
 		if ( photo && this.hud ) {
 
 			if ( this.hud.invOpen ) this.hud.toggleInventory( false );
+			if ( this.hud.journalOpen ) this.hud.toggleJournal( false );
 			if ( this.hud.standOpen ) this.hud.closeStand();
 
 		}
@@ -197,6 +223,7 @@ export class Game {
 		if ( ! uiBlocked && ! photo && ! guideOpen ) {
 
 			if ( this.hud && ( inp.hit( 'KeyI' ) || inp.hit( 'Tab' ) ) ) this.hud.toggleInventory();
+			if ( this.hud && inp.hit( 'KeyJ' ) && ! this.fight ) this.hud.toggleJournal();
 			if ( this.minimap && inp.hit( 'KeyN' ) ) this.minimap.toggleFull();
 
 		}
@@ -207,6 +234,7 @@ export class Game {
 			if ( this.hud ) {
 
 				this.hud.toggleInventory( false );
+				this.hud.toggleJournal( false );
 				this.hud.closeStand();
 
 			}
@@ -222,7 +250,7 @@ export class Game {
 		const lDown = lmb && ! this._lmb, lUp = ! lmb && this._lmb, rDown = rmb && ! this._rmb;
 		this._lmb = lmb;
 		this._rmb = rmb;
-		const modalNow = ( this.hud && ( this.hud.invOpen || this.hud.standOpen ) ) || ( this.minimap && this.minimap.fullOpen ) || uiBlocked || guideOpen || photo;
+		const modalNow = ( this.hud && ( this.hud.invOpen || this.hud.standOpen || this.hud.journalOpen ) ) || ( this.minimap && this.minimap.fullOpen ) || uiBlocked || guideOpen || photo;
 
 		if ( rod.equipped && ! modalNow ) {
 
@@ -262,6 +290,7 @@ export class Game {
 
 					L.shown = true;
 					this.hud.showCatch( L.card, CATCH_CARD_MS );
+					this.app.mp?.broadcastCatch?.( L.card );
 
 				}
 
@@ -296,6 +325,7 @@ export class Game {
 		p.busy = rod.lineInWater || rod.state === 'windup';
 
 		this.updateBoat( dt );
+		this.updateExploration( dt );
 
 		// the traders
 		for ( const v of this.vendors ) v.update( dt, p.mode === 'walk' ? p.position : null );
@@ -315,6 +345,8 @@ export class Game {
 			power: rod.power,
 			bite: this.bite && this.bite.phase === 'take',
 			aiming: rod.equipped,
+			lure: rod.equipped ? this.state.lure : null,
+			rally: this.rally?.active ? { gate: this.rally.gateIndex, total: RALLY_GATES.length, elapsed: this.rally.elapsed } : null,
 		} );
 		if ( this.minimap ) this.minimap.update( dt );
 		if ( this.guide ) this.guide.update( dt );
@@ -465,7 +497,7 @@ export class Game {
 		}
 
 		const w = this.app.weather ? this.app.weather.getGameplayState() : null;
-		this.bite = { phase: 'wait', t: biteDelay( this.habitat(), this.hour, Math.random, w ) };
+		this.bite = { phase: 'wait', t: biteDelay( this.habitat(), this.hour, Math.random, w, this.state.lure ) };
 
 	}
 
@@ -486,7 +518,7 @@ export class Game {
 
 			const h = this.habitat();
 			const w = this.app.weather ? this.app.weather.getGameplayState() : null;
-			const species = pickSpecies( h, this.hour, Math.random, w );
+			const species = pickSpecies( h, this.hour, Math.random, w, this.state.lure );
 			if ( ! species ) {
 
 				b.t = 8;
@@ -495,7 +527,7 @@ export class Game {
 			}
 
 			b.species = species;
-			b.kg = rollWeight( species );
+			b.kg = rollWeight( species, Math.random, this.state.lure );
 			b.phase = 'nibble';
 			b.nibbles = 1 + Math.floor( Math.random() * 3 );
 			b.t = 0.7 + Math.random() * 0.8;
@@ -519,7 +551,7 @@ export class Game {
 
 			this.toast( tr( 'It took the bait and ran' ), 1800 );
 			const w = this.app.weather ? this.app.weather.getGameplayState() : null;
-			this.bite = { phase: 'wait', t: biteDelay( this.habitat(), this.hour, Math.random, w ) };
+			this.bite = { phase: 'wait', t: biteDelay( this.habitat(), this.hour, Math.random, w, this.state.lure ) };
 
 		}
 
@@ -562,6 +594,28 @@ export class Game {
 			const info = this.state.lastCatch;
 			if ( au && au.fishSplash ) au.fishSplash( this.rod.bobber, 0.8 );
 			if ( au && au.fishFlop ) au.fishFlop();
+
+			// Check active bounties & tournament score
+			const hab = this.habitat();
+			const w = this.app.weather ? this.app.weather.getGameplayState() : null;
+			const bRes = applyCatchToBounties( this.state.bounties, { species: f.species, kg: f.kg }, { hour: this.hour, rainIntensity: w?.rainIntensity || 0, stormIntensity: w?.stormIntensity || 0, habitat: hab } );
+			if ( bRes.completed.length ) {
+
+				this.state.bountiesDone += bRes.completed.length;
+				this.state.addMoney( bRes.totalReward );
+				if ( au && au.uiChime ) au.uiChime( 'reward' );
+				const zh = getLang() === 'zh';
+				this.toast( zh ? `悬赏订单完成！获得奖金 $${ bRes.totalReward }` : `Bounty completed! +$${ bRes.totalReward }`, 4000 );
+
+			} else {
+
+				this.state.save();
+				this.state.emit();
+
+			}
+
+			this.app.mp?.recordTournamentCatch?.( info );
+
 			// the catch card (with a HUD) while the fish hangs on the line; a toast otherwise
 			if ( this.hud ) this.landing = { species: f.species, kg: f.kg, card: info, cardT: 0 };
 			else {
@@ -603,6 +657,94 @@ export class Game {
 		this.display.hide();
 		if ( this.hud && this.hud.catchOpen ) this.hud.hideCatch();
 		if ( this.rod.state === 'landing' ) this.rod.setState( 'idle' );
+
+	}
+
+	updateExploration( dt ) {
+
+		const app = this.app;
+		const p = app.player;
+		const zh = getLang() === 'zh';
+
+		this._exploreT += dt;
+		if ( this._exploreT >= 0.45 && p ) {
+
+			this._exploreT = 0;
+			const disc = checkLandmarkDiscovery( p.position, this.state.landmarks, false );
+			if ( disc ) {
+
+				const lm = disc.landmark;
+				this.state.recordLandmark( lm.id, false, lm.reward );
+				app.audio?.uiChime?.( 'reward' );
+				const title = zh ? lm.nameZh : lm.nameEn;
+				this.toast( zh ? `发现风景打卡点「${ title }」· 奖励 $${ lm.reward }` : `Discovered ${ title } · +$${ lm.reward }`, 3600 );
+
+			}
+
+		}
+
+		if ( this.rally ) {
+
+			const vh = p?.mode === 'vehicle' ? p.activeVehicle : null;
+			const ev = this.rally.update( dt, p, vh );
+			if ( ev ) {
+
+				if ( ev.started ) {
+
+					app.audio?.uiChime?.( 'checkpoint' );
+					this.toast( zh ? '东岬越野计时赛开始！冲向灯塔终点！' : 'East Headland Rally started!', 2400 );
+
+				} else if ( ev.gateHit ) {
+
+					app.audio?.uiChime?.( 'checkpoint' );
+
+				} else if ( ev.finished ) {
+
+					const { elapsed, medal, vehicleId } = ev;
+					const rec = this.state.recordRallyTime( vehicleId, elapsed );
+					this.state.addMoney( medal.reward );
+					app.audio?.uiChime?.( 'tourney' );
+					const tierZh = { gold: '金牌', silver: '银牌', bronze: '铜牌', finish: '完赛' }[ medal.tier ] || '完赛';
+					const tierEn = medal.tier.toUpperCase();
+					const msg = zh
+						? `越野赛冲线 ${ elapsed.toFixed( 2 ) } 秒（${ tierZh }）· 奖励 $${ medal.reward }${ rec.isRecord ? ' ★新个人纪录' : '' }`
+						: `Rally finish ${ elapsed.toFixed( 2 ) }s (${ tierEn }) · +$${ medal.reward }${ rec.isRecord ? ' ★PB!' : '' }`;
+					this.toast( msg, 4500 );
+					if ( app.mp?.status === 'connected' ) {
+
+						app.mp.sendChat( zh ? `完成了东岬越野计时赛：${ elapsed.toFixed( 2 ) } 秒（${ tierZh }）` : `Finished East Headland Rally in ${ elapsed.toFixed( 2 ) }s!` );
+
+					}
+
+				} else if ( ev.cancelled ) {
+
+					this.toast( tr( 'Rally cancelled (left vehicle)' ), 2000 );
+
+				}
+
+			}
+
+		}
+
+	}
+
+	onPhotoTaken() {
+
+		const p = this.app?.player;
+		const pos = this.app?.camera?.position || p?.position;
+		const disc = checkLandmarkDiscovery( pos, this.state.landmarks, true );
+		if ( ! disc ) return;
+		const lm = disc.landmark;
+		const bonus = disc.isNewVisit ? lm.reward + 40 : 40;
+		const res = this.state.recordLandmark( lm.id, true, bonus );
+		if ( res.isNew || res.isNewPhoto ) {
+
+			this.app?.audio?.uiChime?.( 'reward' );
+			const zh = getLang() === 'zh';
+			const title = zh ? lm.nameZh : lm.nameEn;
+			this.toast( zh ? `明信片打卡「${ title }」成功！奖励 $${ bonus }` : `Postcard photo at ${ title }! +$${ bonus }`, 3800 );
+
+		}
 
 	}
 

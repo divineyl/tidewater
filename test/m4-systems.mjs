@@ -48,8 +48,16 @@ test( 'Prefs normalizes sensitivity/audio/livery/tint/postcard fields and round-
 	assert.equal( DEFAULT_PREFS.vehPaint, 'stock' );
 	assert.equal( DEFAULT_PREFS.vehLightTint, 'warm' );
 	assert.equal( DEFAULT_PREFS.photoPostcard, true );
+	assert.equal( DEFAULT_PREFS.cloudQuality, 'high' );
+	assert.equal( DEFAULT_PREFS.caustics, true );
+	assert.equal( DEFAULT_PREFS.autoFps, false );
 
 	const clamped = normalizePrefs( {
+		qualityPreset: 'potato',
+		renderScale: 0.4,
+		cloudQuality: 'off',
+		caustics: false,
+		autoFps: true,
 		lookSensitivity: 99,
 		invertY: true,
 		volAmbient: - 1,
@@ -58,6 +66,13 @@ test( 'Prefs normalizes sensitivity/audio/livery/tint/postcard fields and round-
 		vehLightTint: 'led',
 		photoPostcard: false,
 	} );
+	assert.equal( clamped.qualityPreset, 'potato' );
+	assert.equal( clamped.renderScale, 0.4 );
+	assert.equal( clamped.cloudQuality, 'off' );
+	assert.equal( clamped.caustics, false );
+	assert.equal( clamped.autoFps, true );
+	assert.equal( normalizePrefs( { cloudQuality: 'ultra-fake', renderScale: 0.1 } ).cloudQuality, 'high' );
+	assert.equal( normalizePrefs( { renderScale: 0.1 } ).renderScale, 0.4 );
 	assert.equal( clamped.lookSensitivity, 2.2 );
 	assert.equal( clamped.invertY, true );
 	assert.equal( clamped.volAmbient, 0 );
@@ -214,6 +229,8 @@ test( 'i18n translates all Milestone 4 controls, liveries, tints, postcard & sav
 			'Dune gold', 'Obsidian black', 'Sea pearl', 'Warm halogen', 'Ice white LED',
 			'Amber fog', 'Ambient & sea', 'Vehicles & boat', 'Fishing & UI', 'Rain & thunder',
 			'Export save', 'Import save', 'Save exported', 'Save imported', 'Invalid save file',
+			'Smooth (Low-end)', 'Smooth', 'Graphics quality', 'Graphics',
+			'Volumetric clouds', 'Water caustics', 'Low', 'Medium', 'Auto FPS boost',
 		] ) {
 
 			assert.notEqual( tr( key ), key, `Expected Simplified Chinese translation for "${ key }"` );

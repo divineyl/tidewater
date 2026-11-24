@@ -3,7 +3,8 @@ import { UI } from './UI.js';
 import { G } from '../core/Globals.js';
 import { GroundBounce } from '../materials/GroundBounce.js';
 import { WEATHER_PRESETS, WEATHER_ORDER } from '../weather/WeatherSystem.js';
-import { UPGRADES } from '../game/Gear.js';
+import { UPGRADES, BOAT_PAINTS, BOAT_PAINT_IDS } from '../game/Gear.js';
+import { GPU } from '../engine/gpu/GPU.js';
 import { getLang, setLang, onLangChange, tr, trWeather, trUpgradeLabel } from '../i18n/i18n.js';
 
 // Binds the Tidewater UI (panel + HUD) to the running app.
@@ -58,6 +59,9 @@ export class AppUI {
 			shadows: app.shadows ? app.shadows.enabled : true,
 			ssr: app.waterMaterial ? app.waterMaterial.params.ssr.value > 0.5 : true,
 			qualityPreset: app.qualityPreset || 'high',
+			cloudQuality: app.cloudQuality || 'high',
+			causticsOn: app.causticsEnabled !== false,
+			autoFps: !! app.autoFps,
 			audioVolume: app.audio ? app.audio.volume : ( app.prefs?.data.audioVolume ?? 1 ),
 			audioMuted: app.audio ? app.audio.muted : ( app.prefs?.data.audioMuted ?? false ),
 			volAmbient: app.prefs?.data.volAmbient ?? 1,
@@ -73,6 +77,9 @@ export class AppUI {
 			vehRider: app.motorcycle ? app.motorcycle.showRider : true,
 			vehPaint: app.motorcycle ? app.motorcycle.paintId : ( app.prefs?.data.vehPaint ?? 'stock' ),
 			vehLightTint: app.motorcycle ? app.motorcycle.lightTint : ( app.prefs?.data.vehLightTint ?? 'warm' ),
+			boatPaint: app.boat ? app.boat.paintId : ( app.prefs?.data.boatPaint ?? 'classic' ),
+			boatName: app.prefs?.data.boatName ?? '',
+			islandRadio: app.prefs?.data.islandRadio ?? false,
 		};
 
 		ui.onPhotoMode = ( on ) => app.onPhotoModeChange( on );
@@ -86,6 +93,7 @@ export class AppUI {
 		};
 		ui.setPhotoFov( app.camera.fov );
 		ui.setPhotoPostcard( app.photoPostcard );
+		ui.setQualityPreset( app.qualityPreset );
 
 		const spectrum = () => {
 
@@ -462,6 +470,41 @@ export class AppUI {
 
 			}
 
+			if ( app.boat ) {
+
+				const boatFolder = vehTab.addFolder( 'Boat appearance', { icon: 'boat' } );
+				boatFolder.addSelect( {
+					label: 'Boat hull paint', object: s, key: 'boatPaint',
+					options: BOAT_PAINT_IDS.map( ( pid ) => ( { label: BOAT_PAINTS[ pid ].label, value: pid } ) ),
+					onChange: ( v ) => {
+
+						app.boat.setPaint?.( v );
+						if ( app.prefs ) app.prefs.save( { boatPaint: v } );
+
+					},
+				} );
+				boatFolder.addInfo( {
+					label: 'Boat name',
+					get: () => s.boatName || tr( 'Unnamed Vessel' ),
+				} );
+				boatFolder.addButton( {
+					label: 'Rename boat', icon: 'palette', variant: 'ghost',
+					onClick: () => {
+
+						if ( typeof window === 'undefined' || typeof window.prompt !== 'function' ) return;
+						const raw = window.prompt( tr( 'Enter custom boat name (max 18 chars)' ), s.boatName || '' );
+						if ( raw === null ) return;
+						const clean = raw.trim().slice( 0, 18 );
+						s.boatName = clean;
+						if ( app.prefs ) app.prefs.save( { boatName: clean } );
+						ui.refresh();
+						ui.toast( clean ? `${ tr( 'Boat renamed' ) }: ${ clean }` : tr( 'Boat name cleared' ) );
+
+					},
+				} );
+
+			}
+
 		}
 
 		// ---------------------------------------------------------------- Effects
@@ -494,6 +537,16 @@ export class AppUI {
 		live.addInfo( { label: 'Frame rate', get: () => `${ ( app.fps || 0 ).toFixed( 0 ) } fps` } );
 		live.addInfo( { label: 'CPU per frame', get: () => `${ ( app.cpuMs || 0 ).toFixed( 2 ) } ms` } );
 		live.addInfo( { label: 'Render size', get: () => `${ app.sceneRenderer.width } × ${ app.sceneRenderer.height }` } );
+		live.addInfo( {
+			label: 'GPU',
+			get: () => {
+
+				const info = GPU.adapterInfo;
+				if ( ! info ) return 'WebGPU';
+				return `${ info.name } (${ tr( `gpu_tier_${ info.tier }` ) })`;
+
+			},
+		} );
 		const quality = perf.addFolder( 'Quality', { icon: 'layers' } );
 		const syncQualityControls = () => {
 
@@ -505,13 +558,26 @@ export class AppUI {
 			s.ao = app.post.params.aoStrength.value;
 			if ( app.post.motionBlur ) s.motionBlur = app.post.motionBlur.shutter.value;
 			s.sharpen = app.post.params.sharpen.value;
+			s.cloudQuality = app.cloudQuality;
+			s.causticsOn = app.causticsEnabled;
+			s.autoFps = !! app.autoFps;
+			if ( app.caustics ) s.caustics = app.caustics.strength.value;
+			ui.setQualityPreset( app.qualityPreset );
 			ui.refresh();
+
+		};
+
+		ui.onQualityPreset = ( id ) => {
+
+			app.applyQualityPreset( id );
+			syncQualityControls();
 
 		};
 
 		quality.addSelect( {
 			label: 'Quality preset', object: s, key: 'qualityPreset',
 			options: [
+				{ label: 'Smooth (Low-end)', value: 'potato' },
 				{ label: 'Eco', value: 'eco' },
 				{ label: 'Balanced', value: 'balanced' },
 				{ label: 'High', value: 'high' },
@@ -524,14 +590,26 @@ export class AppUI {
 
 			},
 		} );
-		quality.addSlider( { label: 'Render scale', object: s, key: 'renderScale', min: 0.5, max: 1, step: 0.05, format: ( v ) => `${ Math.round( v * 100 ) }%`, tooltip: 'Internal resolution; the temporal upscaler reconstructs the full output resolution.', onChange: ( v ) => {
+		quality.addSlider( { label: 'Render scale', object: s, key: 'renderScale', min: 0.4, max: 1, step: 0.05, format: ( v ) => `${ Math.round( v * 100 ) }%`, tooltip: 'Internal resolution; the temporal upscaler reconstructs the full output resolution.', onChange: ( v ) => {
 
 			app.setRenderScale( v );
 			app.qualityPreset = 'custom';
 			s.qualityPreset = 'custom';
+			ui.setQualityPreset( 'custom' );
 			if ( app.prefs ) app.prefs.save( { qualityPreset: 'custom', renderScale: app.settings.renderScale } );
 
 		} } );
+		quality.addToggle( {
+			label: 'Auto FPS boost', object: s, key: 'autoFps',
+			tooltip: 'Automatically nudges internal resolution between 75% and your target scale during heavy storm scenes to keep frame rate smooth without pixelation.',
+			onChange: ( v ) => {
+
+				app.autoFps = !! v;
+				if ( ! app.autoFps ) app.setRenderScale( app._targetRenderScale );
+				if ( app.prefs ) app.prefs.save( { autoFps: app.autoFps } );
+
+			},
+		} );
 		// anti-aliasing: the TAA with 2..16 jitter positions averaged per pixel, or none
 		s.aa = app.post.aaMode === 'none' ? 0 : app.post.taau.jitterPhaseOverride;
 		quality.addSelect( { label: 'Anti-aliasing', object: s, key: 'aa', tooltip: 'Temporal anti-aliasing: each pixel averages this many sub-pixel sample positions over successive frames (it also smooths dithered fades and shadow noise). More samples cost nothing per frame but take a few more frames to settle.', options: [ { label: 'Off', value: 0 }, { label: '2x', value: 2 }, { label: '4x', value: 4 }, { label: '8x', value: 8 }, { label: '16x', value: 16 } ], onChange: ( v ) => {
@@ -541,6 +619,7 @@ export class AppUI {
 			if ( n > 0 ) app.post.taau.jitterPhaseOverride = n;
 			app.qualityPreset = 'custom';
 			s.qualityPreset = 'custom';
+			ui.setQualityPreset( 'custom' );
 			if ( app.prefs ) app.prefs.save( { qualityPreset: 'custom', aa: n } );
 
 		} } );
@@ -549,6 +628,7 @@ export class AppUI {
 			app.shadows.enabled = v;
 			app.qualityPreset = 'custom';
 			s.qualityPreset = 'custom';
+			ui.setQualityPreset( 'custom' );
 			if ( app.prefs ) app.prefs.save( { qualityPreset: 'custom', shadows: v } );
 
 		} } );
@@ -558,9 +638,41 @@ export class AppUI {
 			app.waterMaterial.params.ssr.value = v ? 1 : 0;
 			app.qualityPreset = 'custom';
 			s.qualityPreset = 'custom';
+			ui.setQualityPreset( 'custom' );
 			if ( app.prefs ) app.prefs.save( { qualityPreset: 'custom', ssr: v } );
 
 		} } );
+		quality.addSelect( {
+			label: 'Volumetric clouds', object: s, key: 'cloudQuality',
+			options: [
+				{ label: 'Off', value: 'off' },
+				{ label: 'Low', value: 'low' },
+				{ label: 'Medium', value: 'medium' },
+				{ label: 'High', value: 'high' },
+			],
+			onChange: ( v ) => {
+
+				app.setCloudQuality( v );
+				app.qualityPreset = 'custom';
+				s.qualityPreset = 'custom';
+				ui.setQualityPreset( 'custom' );
+				if ( app.prefs ) app.prefs.save( { qualityPreset: 'custom', cloudQuality: v } );
+
+			},
+		} );
+		quality.addToggle( {
+			label: 'Water caustics', object: s, key: 'causticsOn',
+			onChange: ( v ) => {
+
+				app.setCausticsEnabled( v );
+				if ( app.caustics ) s.caustics = app.caustics.strength.value;
+				app.qualityPreset = 'custom';
+				s.qualityPreset = 'custom';
+				ui.setQualityPreset( 'custom' );
+				if ( app.prefs ) app.prefs.save( { qualityPreset: 'custom', caustics: !! v } );
+
+			},
+		} );
 
 		const audioFolder = perf.addFolder( 'Audio', { icon: 'volume' } );
 		audioFolder.addSlider( { label: 'Master volume', object: s, key: 'audioVolume', min: 0, max: 1, step: 0.02, format: ( v ) => `${ Math.round( v * 100 ) }%`, onChange: ( v ) => {
@@ -591,6 +703,16 @@ export class AppUI {
 			if ( app.prefs ) app.prefs.save( { audioMuted: v } );
 
 		} } );
+		audioFolder.addToggle( {
+			label: 'Island ambient radio', object: s, key: 'islandRadio',
+			tooltip: 'Soft tropical chill chords over the coastal ambiance while above water.',
+			onChange: ( v ) => {
+
+				if ( app.audio ) app.audio.setRadioEnabled?.( !! v );
+				if ( app.prefs ) app.prefs.save( { islandRadio: !! v } );
+
+			},
+		} );
 
 		const syncStateFields = () => {
 
@@ -614,6 +736,10 @@ export class AppUI {
 				s.vehLightTint = app.motorcycle.lightTint;
 
 			}
+
+			if ( app.boat ) s.boatPaint = app.boat.paintId;
+			s.boatName = app.prefs?.data.boatName ?? '';
+			s.islandRadio = app.prefs?.data.islandRadio ?? false;
 
 			if ( app.weather ) {
 
@@ -675,6 +801,21 @@ export class AppUI {
 			inp.click();
 
 		} } );
+		if ( typeof window !== 'undefined' && window.tidewaterDesktop?.createDesktopShortcut ) {
+
+			general.addButton( {
+				label: 'Create desktop shortcut', icon: 'monitor', variant: 'ghost',
+				onClick: async () => {
+
+					const res = await window.tidewaterDesktop.createDesktopShortcut();
+					if ( res?.ok ) ui.toast( tr( 'Desktop shortcut created' ) );
+					else ui.toast( tr( 'Failed to create shortcut' ) );
+
+				},
+			} );
+
+		}
+
 		general.addButton( { label: 'Reset defaults', icon: 'reset', variant: 'ghost', onClick: () => {
 
 			if ( app.prefs ) app.prefs.reset();
@@ -683,6 +824,243 @@ export class AppUI {
 			ui.toast( tr( 'Settings reset to defaults' ) );
 
 		} } );
+
+		// ---------------------------------------------------------------- Multiplayer
+		const mpTab = ui.addTab( 'multiplayer', 'Multiplayer', 'users' );
+		if ( app.mp ) {
+
+			const mp = app.mp;
+			let selectedMode = mp.transportMode || 'p2p';
+			let draftJoinCode = '';
+			let draftJoinIp = '';
+
+			const box = document.createElement( 'div' );
+			box.className = 'tw-mp-box';
+			mpTab.page.append( box );
+
+			const copyText = ( text ) => {
+
+				if ( ! text ) return;
+				if ( navigator.clipboard && navigator.clipboard.writeText ) {
+
+					navigator.clipboard.writeText( text ).then( () => ui.toast( tr( 'Copied' ) ) ).catch( () => {} );
+
+				}
+
+			};
+
+			const esc = ( v ) => String( v ?? '' ).replace( /[&<>"']/g, ( ch ) => ( { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ ch ] ) );
+			const renderMp = ( sum = mp.getSummary() ) => {
+
+				ui.setMultiplayerStatus( sum );
+				const zh = getLang() === 'zh';
+				const desktopOk = mp.isDesktopAvailable();
+				const connected = sum.status === 'connected';
+				const connecting = sum.status === 'connecting';
+
+				box.innerHTML = '';
+
+				// 1. Nickname card
+				const cardNick = document.createElement( 'div' );
+				cardNick.className = 'tw-mp-card';
+				cardNick.innerHTML = `
+					<div class="tw-mp-lbl">${ tr( 'Your nickname' ) }</div>
+					<div class="tw-mp-row">
+						<input type="text" class="tw-mp-input" maxlength="16" data-mp-nick />
+					</div>`;
+				const nickInp = cardNick.querySelector( '[data-mp-nick]' );
+				nickInp.value = sum.nickname;
+				nickInp.addEventListener( 'keydown', ( e ) => e.stopPropagation() );
+				nickInp.addEventListener( 'change', () => mp.setNickname( nickInp.value ) );
+				box.append( cardNick );
+
+				// 2. Mode & connect / room status
+				if ( ! connected ) {
+
+					const cardMode = document.createElement( 'div' );
+					cardMode.className = 'tw-mp-card';
+					cardMode.innerHTML = `
+						<div class="tw-mp-lbl">${ tr( 'Connection mode' ) }</div>
+						<div class="tw-mp-seg">
+							<button type="button" class="tw-mp-seg-btn ${ selectedMode === 'p2p' ? 'is-active' : '' }" data-mode="p2p">${ tr( 'P2P Room Code' ) }</button>
+							<button type="button" class="tw-mp-seg-btn ${ selectedMode === 'lan' ? 'is-active' : '' }" data-mode="lan">${ tr( 'LAN / Virtual LAN' ) }</button>
+						</div>`;
+					cardMode.querySelectorAll( '[data-mode]' ).forEach( ( b ) => {
+
+						b.addEventListener( 'click', () => {
+
+							selectedMode = b.dataset.mode;
+							renderMp();
+
+						} );
+
+					} );
+					box.append( cardMode );
+
+					const cardAct = document.createElement( 'div' );
+					cardAct.className = 'tw-mp-card';
+					if ( selectedMode === 'p2p' ) {
+
+						cardAct.innerHTML = `
+							<button type="button" class="tw-mp-btn" data-host-p2p ${ connecting ? 'disabled' : '' }>${ tr( 'Create P2P Room' ) }</button>
+							<div class="tw-mp-row">
+								<input type="text" class="tw-mp-input" maxlength="12" data-join-code placeholder="${ tr( 'Enter room code (e.g. TW-4829)' ) }" />
+								<button type="button" class="tw-mp-btn is-ghost" data-join-p2p ${ connecting ? 'disabled' : '' }>${ tr( 'Join Room' ) }</button>
+							</div>`;
+						const codeInp = cardAct.querySelector( '[data-join-code]' );
+						codeInp.value = draftJoinCode;
+						codeInp.addEventListener( 'keydown', ( e ) => e.stopPropagation() );
+						codeInp.addEventListener( 'input', () => { draftJoinCode = codeInp.value; } );
+						cardAct.querySelector( '[data-host-p2p]' ).addEventListener( 'click', () => mp.hostP2P( nickInp.value ) );
+						cardAct.querySelector( '[data-join-p2p]' ).addEventListener( 'click', () => mp.joinP2P( codeInp.value, nickInp.value ) );
+
+					} else {
+
+						cardAct.innerHTML = `
+							<button type="button" class="tw-mp-btn" data-host-lan ${ ( connecting || ! desktopOk ) ? 'disabled' : '' }>${ tr( 'Start LAN Host' ) }</button>
+							${ desktopOk ? '' : `<div class="tw-mp-status">${ tr( 'LAN hosting requires Desktop Edition' ) }</div>` }
+							<div class="tw-mp-row">
+								<input type="text" class="tw-mp-input" maxlength="64" data-join-ip placeholder="${ tr( 'Enter host IP:port (e.g. 192.168.1.50:5195)' ) }" />
+								<button type="button" class="tw-mp-btn is-ghost" data-join-lan ${ connecting ? 'disabled' : '' }>${ tr( 'Connect LAN Host' ) }</button>
+							</div>`;
+						const ipInp = cardAct.querySelector( '[data-join-ip]' );
+						ipInp.value = draftJoinIp;
+						ipInp.addEventListener( 'keydown', ( e ) => e.stopPropagation() );
+						ipInp.addEventListener( 'input', () => { draftJoinIp = ipInp.value; } );
+						cardAct.querySelector( '[data-host-lan]' ).addEventListener( 'click', () => mp.hostLAN( nickInp.value ) );
+						cardAct.querySelector( '[data-join-lan]' ).addEventListener( 'click', () => mp.joinLAN( ipInp.value, nickInp.value ) );
+
+					}
+
+					if ( connecting ) {
+
+						const st = document.createElement( 'div' );
+						st.className = 'tw-mp-status';
+						st.textContent = zh ? '正在建立联机通道…' : 'Connecting…';
+						cardAct.append( st );
+
+					} else if ( sum.status === 'error' && sum.errorMessage ) {
+
+						const st = document.createElement( 'div' );
+						st.className = 'tw-mp-status is-err';
+						st.textContent = sum.errorMessage;
+						cardAct.append( st );
+
+					}
+
+					box.append( cardAct );
+
+				} else {
+
+					const cardRoom = document.createElement( 'div' );
+					cardRoom.className = 'tw-mp-card';
+					const roleLbl = sum.role === 'host' ? ( zh ? '房主' : 'Host' ) : ( zh ? '访客' : 'Guest' );
+					const addrs = ( sum.addresses && sum.addresses.length ) ? sum.addresses : [ sum.roomCode ];
+					cardRoom.innerHTML = `
+						<div class="tw-mp-lbl">${ roleLbl } · ${ zh ? `共 ${ sum.peerCount + 1 } 人在岛上` : `${ sum.peerCount + 1 } in room` }</div>
+						<div class="tw-mp-code">
+							<span>${ esc( sum.roomCode ) }</span>
+							<button type="button" class="tw-mp-btn is-ghost" data-copy>${ tr( 'Copy' ) }</button>
+						</div>
+						${ addrs.length > 1 ? `<div class="tw-mp-status">${ zh ? '可用局域网 / 虚拟局域网地址：' : 'Available addresses: ' }${ esc( addrs.join( ' · ' ) ) }</div>` : '' }
+						<div class="tw-mp-peers">
+							<span class="tw-mp-peer"><i style="background:${ esc( mp.selfColor ) }"></i>${ esc( sum.nickname ) } (${ zh ? '你' : 'You' })</span>
+							${ sum.peers.map( ( p ) => `<span class="tw-mp-peer"><i style="background:${ esc( p.color ) }"></i>${ esc( p.name ) }</span>` ).join( '' ) }
+						</div>
+						<div class="tw-mp-row">
+							<button type="button" class="tw-mp-btn" data-share-wp>${ tr( 'Share waypoint' ) }</button>
+							<button type="button" class="tw-mp-btn is-danger" data-leave>${ tr( 'Disconnect' ) }</button>
+						</div>`;
+					cardRoom.querySelector( '[data-copy]' ).addEventListener( 'click', () => copyText( sum.roomCode ) );
+					cardRoom.querySelector( '[data-share-wp]' ).addEventListener( 'click', () => mp.shareWaypoint() );
+					cardRoom.querySelector( '[data-leave]' ).addEventListener( 'click', () => mp.disconnect() );
+					box.append( cardRoom );
+
+					const tSum = mp.getTournamentSummary?.();
+					const cardTourney = document.createElement( 'div' );
+					cardTourney.className = 'tw-mp-card';
+					if ( tSum && tSum.active ) {
+
+						const mins = Math.floor( tSum.remainingSec / 60 );
+						const secs = Math.floor( tSum.remainingSec % 60 );
+						const clock = `${ String( mins ).padStart( 2, '0' ) }:${ String( secs ).padStart( 2, '0' ) }`;
+						const listHtml = tSum.rows.map( ( r, i ) => {
+
+							const metric = tSum.mode === 'biggestKg' ? `${ r.biggestKg.toFixed( 2 ) } kg`
+								: tSum.mode === 'speciesCount' ? `${ r.speciesCount } ${ zh ? '种' : 'sp' }`
+									: `${ r.totalKg.toFixed( 2 ) } kg`;
+							return `<div class="tw-mp-status">${ i + 1 }. ${ esc( r.name ) } — <b>${ metric }</b></div>`;
+
+						} ).join( '' );
+						cardTourney.innerHTML = `
+							<div class="tw-mp-lbl">🏆 ${ esc( tr( `tourney_${ tSum.mode }` ) ) } · ${ clock }</div>
+							${ listHtml }
+							${ sum.role === 'host' ? `<button type="button" class="tw-mp-btn is-danger" data-stop-tourney>${ tr( 'End tournament' ) }</button>` : '' }`;
+						const stopBtn = cardTourney.querySelector( '[data-stop-tourney]' );
+						if ( stopBtn ) stopBtn.addEventListener( 'click', () => mp.stopTournament() );
+
+					} else if ( sum.role === 'host' ) {
+
+						cardTourney.innerHTML = `
+							<div class="tw-mp-lbl">${ tr( 'Fishing tournament' ) }</div>
+							<div class="tw-mp-row">
+								<select class="tw-mp-input" data-t-mode>
+									<option value="totalKg">${ tr( 'tourney_totalKg' ) }</option>
+									<option value="biggestKg">${ tr( 'tourney_biggestKg' ) }</option>
+									<option value="speciesCount">${ tr( 'tourney_speciesCount' ) }</option>
+								</select>
+								<select class="tw-mp-input" data-t-dur style="max-width:96px">
+									<option value="180">3 ${ zh ? '分钟' : 'min' }</option>
+									<option value="300" selected>5 ${ zh ? '分钟' : 'min' }</option>
+									<option value="600">10 ${ zh ? '分钟' : 'min' }</option>
+								</select>
+							</div>
+							<button type="button" class="tw-mp-btn" data-start-tourney>${ tr( 'Start tournament' ) }</button>`;
+						cardTourney.querySelector( '[data-start-tourney]' ).addEventListener( 'click', () => {
+
+							const mode = cardTourney.querySelector( '[data-t-mode]' ).value;
+							const dur = Number( cardTourney.querySelector( '[data-t-dur]' ).value ) || 300;
+							mp.startTournament( mode, dur );
+
+						} );
+
+					} else {
+
+						cardTourney.innerHTML = `<div class="tw-mp-status">${ tr( 'Waiting for host to start a fishing tournament.' ) }</div>`;
+
+					}
+
+					box.append( cardTourney );
+
+				}
+
+				// 3. Concise tip card
+				const cardTip = document.createElement( 'div' );
+				cardTip.className = 'tw-mp-card';
+				cardTip.innerHTML = `<div class="tw-mp-status">${ tr( 'P2P uses a 4-char room code without buying servers (works on Web & Desktop). If strict NAT blocks connection, switch to LAN mode with same Wi-Fi or Tailscale/ZeroTier.' ) }</div>`;
+				box.append( cardTip );
+
+			};
+
+			mp.onStateChange = ( summary ) => renderMp( summary );
+			mp.onTournamentChange = ( sum ) => {
+
+				ui.setTournamentState( sum );
+				if ( ui._panelOpen && ui.activeTab?.id === 'multiplayer' ) renderMp();
+
+			};
+			mp.onChat = ( entry ) => ui.pushChatMessage( entry );
+			ui.onChatSend = ( text ) => mp.sendChat( text );
+			ui.onEmoteSend = ( kind ) => mp.sendEmote( kind );
+			onLangChange( () => {
+
+				ui.setTournamentState( mp.getTournamentSummary?.() );
+				renderMp();
+
+			} );
+			renderMp();
+
+		}
 
 		this._t = 0;
 
@@ -758,6 +1136,7 @@ export class AppUI {
 			: `${ p.camMode === 'first' ? '1st' : '3rd' } person`;
 		const mode = p.mode === 'boat' ? `${ tr( 'Boat' ) } · ${ camTag }`
 			: p.mode === 'vehicle' ? `${ tr( p.activeVehicle ? p.activeVehicle.name : 'Motorcycle' ) } · ${ camTag }`
+			: p.mode === 'coop' ? tr( p.coop?.kind === 'buggy' ? 'Passenger seat' : 'Friend\'s boat' )
 			: p.mode === 'deck' ? tr( 'On deck' )
 			: p.mode === 'swim' ? tr( app.camera.position.y < ( app.cameraWaterHeight ?? 0 ) - 0.3 ? 'Diving' : 'Swimming' ) : tr( 'Walking' );
 		ui.setMode( mode );

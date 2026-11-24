@@ -171,16 +171,24 @@ export class AirHaze {
 	// record the march and the god ray passes (the post chain calls this before the composite)
 	render() {
 
+		const on = this.enabled.value > 0.5 && this.shafts.value > 0;
+		if ( ! on ) {
+
+			this._histValid = false;
+			this.uniforms.fields.histValid.value = 0;
+			return;
+
+		}
+
 		if ( ! this._passes ) this._build();
 		const p = this._passes;
 		p.march.render( { colorViews: [ this.low.texture ], clear: CLR } );
 		// accumulate: 16 jittered steps per pixel are noisy, and the final temporal resolve clamps the
 		// noisy history away, so the shafts flickered; here they settle over ~10 frames
-		const on = this.enabled.value > 0.5 && this.shafts.value > 0;
-		this.uniforms.fields.histValid.value = this._histValid && on ? 1 : 0;
+		this.uniforms.fields.histValid.value = this._histValid ? 1 : 0;
 		p.temporal[ this._hc ].render( { colorViews: [ this.hist[ 1 - this._hc ].texture ], clear: CLR } );
 		this._hc = 1 - this._hc;
-		this._histValid = on;
+		this._histValid = true;
 		// the god ray passes only matter while the light is in view (the composite skips them otherwise)
 		if ( this.ssFade.value > 0.001 ) {
 

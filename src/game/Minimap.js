@@ -1,6 +1,7 @@
 import { WORLD } from '../world/WorldLayout.js';
 import { STAND } from './FishStand.js';
 import { CHANDLERY } from './Chandlery.js';
+import { LANDMARKS } from './Landmarks.js';
 import { getLang, onLangChange, tr } from '../i18n/i18n.js';
 import {
 	waypointDistance, waypointBearingDeg, compassCardinal,
@@ -46,6 +47,8 @@ const CSS = /* css */`
 .gm-mk.is-buggy > i { background: #f5a65b; color: #1a1006; }
 .gm-mk.is-lighthouse > i { background: #ef574a; color: #fff; }
 .gm-mk.is-waypoint > i { background: #5ce0d2; color: #05201c; animation: gm-map-pulse 1.4s var(--tw-ease-io) infinite; }
+.gm-mk.is-rally > i { background: #ffd166; color: #1f1404; animation: gm-map-pulse 1.1s var(--tw-ease-io) infinite; }
+.gm-mk.is-peer > i { width: calc(14 * var(--tw-u)); height: calc(14 * var(--tw-u)); margin: calc(-7 * var(--tw-u)) 0 0 calc(-7 * var(--tw-u)); color: #fff; }
 .gm-mk > b { position: absolute; left: 0; top: 0; width: 0; height: 0; border-left: calc(5 * var(--tw-u)) solid transparent; border-right: calc(5 * var(--tw-u)) solid transparent;
 	border-bottom: calc(7 * var(--tw-u)) solid rgba(255,255,255,0.9); margin: calc(-19 * var(--tw-u)) 0 0 calc(-5 * var(--tw-u)); transform-origin: calc(5 * var(--tw-u)) calc(19 * var(--tw-u)); display: none; }
 .gm-mk.is-edge > b { display: block; }
@@ -108,6 +111,10 @@ const CSS = /* css */`
 .gm-fm-pin.is-buggy > i { background: #f5a65b; color: #1a1006; }
 .gm-fm-pin.is-lighthouse > i { background: #ef574a; color: #fff; }
 .gm-fm-pin.is-waypoint > i { background: #5ce0d2; color: #05201c; animation: gm-map-pulse 1.4s var(--tw-ease-io) infinite; }
+.gm-fm-pin.is-landmark > i { width: calc(12 * var(--tw-u)); height: calc(12 * var(--tw-u)); background: rgba(255, 214, 102, 0.25); color: #ffd166; border: 1.5px solid #ffd166; box-shadow: none; }
+.gm-fm-pin.is-landmark.is-done > i { background: #ffd166; color: #1a1004; }
+.gm-fm-pin.is-peer { z-index: 3; }
+.gm-fm-pin.is-peer > i { width: calc(16 * var(--tw-u)); height: calc(16 * var(--tw-u)); }
 .gm-fm-pin.is-player { z-index: 4; }
 .gm-fm-pin.is-player svg { width: calc(20 * var(--tw-u)); height: calc(20 * var(--tw-u)); filter: drop-shadow(0 1px 3px rgba(0,0,0,0.75)); }
 .gm-fm-tag { position: absolute; top: 100%; left: 50%; transform: translate(-50%, calc(3 * var(--tw-u))); padding: calc(1 * var(--tw-u)) calc(5 * var(--tw-u));
@@ -215,12 +222,14 @@ export class Minimap {
 		this.waypoint = null;
 		this.fullOpen = false;
 		this._canvasSynced = false;
+		this.peerMarkers = new Map();
 
 		this.markers = [
 			{ id: 'joe', ...mk( 'joe', ICON.fish ), pos: () => ( { x: STAND.x, z: STAND.z } ) },
 			{ id: 'marta', ...mk( 'marta', ICON.anchor ), pos: () => ( { x: CHANDLERY.x, z: CHANDLERY.z } ) },
 			{ id: 'lighthouse', ...mk( 'lighthouse', ICON.lighthouse ), pos: () => WORLD.lighthouse?.position || null },
 			{ id: 'waypoint', ...mk( 'waypoint', ICON.waypoint ), pos: () => this.waypoint, hideWhen: () => ! this.waypoint },
+			{ id: 'rally', ...mk( 'rally', ICON.waypoint ), pos: () => game.rally?.active ? game.rally.getNextGate() : null, hideWhen: () => ! game.rally?.active },
 			{ id: 'boat', ...mk( 'boat', ICON.boat ), pos: () => {
 
 				const b = game.app.boatCtl;
@@ -353,6 +362,17 @@ export class Minimap {
 			} )(),
 		};
 
+		this.landmarkPins = LANDMARKS.map( ( lm ) => {
+
+			const el = h( 'div', 'gm-fm-pin is-landmark', '<i></i>' );
+			const f = worldToMapFraction( lm.x, lm.z, X0, Z0, EXT );
+			el.style.left = `${ ( sat( f.u ) * 100 ).toFixed( 2 ) }%`;
+			el.style.top = `${ ( sat( f.v ) * 100 ).toFixed( 2 ) }%`;
+			this.fmMarks.append( el );
+			return { lm, el };
+
+		} );
+
 		// Interactions
 		this.el.addEventListener( 'click', ( e ) => {
 
@@ -446,6 +466,7 @@ export class Minimap {
 			if ( this.game.hud ) {
 
 				this.game.hud.toggleInventory( false );
+				this.game.hud.toggleJournal?.( false );
 				this.game.hud.closeStand();
 
 			}
@@ -573,6 +594,18 @@ export class Minimap {
 		const app = this.game.app, cam = app.camera;
 		const ppos = this._playerXZ();
 		const puv = placePct( this.fullPins.player, ppos.x, ppos.z, true );
+		if ( this.landmarkPins ) {
+
+			const lms = this.game?.state?.landmarks || {};
+			for ( const lp of this.landmarkPins ) {
+
+				const rec = lms[ lp.lm.id ];
+				const done = !! ( rec && ( rec === true || rec.visited ) );
+				lp.el.classList.toggle( 'is-done', done );
+
+			}
+
+		}
 		const e = cam.matrixWorld.elements;
 		let fx = - e[ 8 ], fz = - e[ 10 ];
 		const hdgRad = Math.atan2( fx, - fz );
@@ -605,6 +638,22 @@ export class Minimap {
 
 			placePct( this.fullPins.waypoint, 0, 0, false );
 			this.fmLine.setAttribute( 'opacity', '0' );
+
+		}
+
+		for ( const pm of this.peerMarkers.values() ) {
+
+			if ( ! pm.latest ) {
+
+				pm.fullEl.style.display = 'none';
+				continue;
+
+			}
+
+			pm.fullEl.style.display = '';
+			const f = worldToMapFraction( pm.latest.x, pm.latest.z, X0, Z0, EXT );
+			pm.fullEl.style.left = `${ ( sat( f.u ) * 100 ).toFixed( 2 ) }%`;
+			pm.fullEl.style.top = `${ ( sat( f.v ) * 100 ).toFixed( 2 ) }%`;
 
 		}
 
@@ -813,6 +862,48 @@ export class Minimap {
 			if ( hide ) continue;
 			const edge = place( m.el, q.x - x, q.z - z, 12, m.arrow );
 			this._toggle( m.el, 'is-edge', edge );
+
+		}
+
+		const netPeers = app.mp?.getPeersList?.() || [];
+		const seenPeers = new Set();
+		for ( const np of netPeers ) {
+
+			seenPeers.add( np.id );
+			let pm = this.peerMarkers.get( np.id );
+			if ( ! pm ) {
+
+				const miniEl = h( 'div', 'gm-mk is-peer', '<b></b><i></i>' );
+				miniEl.querySelector( 'i' ).style.background = np.color || '#5ce0d2';
+				this.marks.append( miniEl );
+				const fullEl = h( 'div', 'gm-fm-pin is-peer', '<i></i><span class="gm-fm-tag"></span>' );
+				fullEl.querySelector( 'i' ).style.background = np.color || '#5ce0d2';
+				fullEl.querySelector( '.gm-fm-tag' ).textContent = np.name || '';
+				this.fmMarks.append( fullEl );
+				pm = { miniEl, arrow: miniEl.firstChild, fullEl, tag: fullEl.querySelector( '.gm-fm-tag' ), latest: np };
+				this.peerMarkers.set( np.id, pm );
+
+			} else {
+
+				pm.latest = np;
+				if ( pm.tag && pm.tag.textContent !== np.name ) pm.tag.textContent = np.name;
+
+			}
+
+			const edge = place( pm.miniEl, np.x - x, np.z - z, 10, pm.arrow );
+			this._toggle( pm.miniEl, 'is-edge', edge );
+
+		}
+
+		for ( const [ pid, pm ] of this.peerMarkers.entries() ) {
+
+			if ( ! seenPeers.has( pid ) ) {
+
+				pm.miniEl.remove();
+				pm.fullEl.remove();
+				this.peerMarkers.delete( pid );
+
+			}
 
 		}
 

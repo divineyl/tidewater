@@ -8,11 +8,52 @@
 // range written twice in one frame keeps only the last value for every pass. Anything that changes
 // between passes of a frame needs its own buffer (or its own offset).
 
+export function classifyGpuAdapter( info ) {
+
+	const src = info && typeof info === 'object' ? info : {};
+	const vendor = String( src.vendor || '' ).trim();
+	const architecture = String( src.architecture || '' ).trim();
+	const device = String( src.device || '' ).trim();
+	const description = String( src.description || '' ).trim();
+	const name = description || [ vendor, device || architecture ].filter( Boolean ).join( ' ' ) || 'WebGPU GPU';
+	const text = `${ vendor } ${ architecture } ${ device } ${ description }`.toLowerCase();
+
+	if ( src.isFallbackAdapter || /swiftshader|basic render|llvmpipe|warp|software/i.test( text ) ) {
+
+		return { name, vendor, tier: 'software', isIntegrated: false, isSoftware: true, recommendedPreset: 'potato' };
+
+	}
+
+	const isDiscreteArc = /\barc\s*(a[357]\d\d|b[5]\d\d)\b/i.test( text );
+	const isDedicatedBrand = /\b(gtx|rtx|rx\s*\d|radeon\s*(rx|pro|r[579])|quadro|tesla|titan|geforce)\b/i.test( text );
+	if ( ! isDiscreteArc && ! isDedicatedBrand && /(intel.*(uhd|hd graphics|iris|arc graphics|integrated)|radeon\(tm\) graphics|vega\s*[3-9]\b|apple m[12]\b|mali|adreno)/i.test( text ) ) {
+
+		return { name, vendor, tier: 'integrated', isIntegrated: true, isSoftware: false, recommendedPreset: 'potato' };
+
+	}
+
+	if ( /\b(gtx\s*(7\d\d|8\d\d|9\d\d|10[356]\d|16[35]\d)|mx[1-5]\d\d|rx\s*(460|470|550|560|570|6400|6500)|rtx\s*(2050|3050))\b/i.test( text ) ) {
+
+		return { name, vendor, tier: 'entry', isIntegrated: false, isSoftware: false, recommendedPreset: 'eco' };
+
+	}
+
+	if ( /\b(gtx\s*(10[78]\d|166\d)|rtx\s*(20[67]\d|306\d|406\d)|rx\s*(580|590|5[567]00|6[67]00|7600))\b/i.test( text ) ) {
+
+		return { name, vendor, tier: 'mid', isIntegrated: false, isSoftware: false, recommendedPreset: 'balanced' };
+
+	}
+
+	return { name, vendor, tier: 'high', isIntegrated: false, isSoftware: false, recommendedPreset: 'high' };
+
+}
+
 export const GPU = {
 
 	device: null,
 	queue: null,
 	adapter: null,
+	adapterInfo: null,
 	context: null,
 	canvas: null,
 	format: 'bgra8unorm',
@@ -44,6 +85,13 @@ export const GPU = {
 
 		}
 		this.adapter = adapter;
+		let rawInfo = adapter.info || null;
+		if ( ! rawInfo && typeof adapter.requestAdapterInfo === 'function' ) {
+
+			try { rawInfo = await adapter.requestAdapterInfo(); } catch { rawInfo = null; }
+
+		}
+		this.adapterInfo = classifyGpuAdapter( rawInfo );
 
 		const L = adapter.limits;
 		const want = {

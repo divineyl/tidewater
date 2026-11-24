@@ -192,7 +192,22 @@ fn _uwMapLookup( xz: vec2f, waves: bool ) -> UwMapSample {
 `,
 	} );
 
-	const update = ( camera ) => {
+	let frameCount = 0;
+	let primed = false;
+	const update = ( camera, staggered = false ) => {
+
+		if ( staggered && primed ) {
+
+			const lv = levels[ ( frameCount ++ ) & 1 ];
+			const half = lv.extent / 2;
+			lv.origin.value.set(
+				Math.floor( camera.position.x / lv.texel ) * lv.texel - half,
+				Math.floor( camera.position.z / lv.texel ) * lv.texel - half,
+			);
+			lv.kernel.dispatch( [ MAP_N / 8, MAP_N / 8, 1 ] );
+			return;
+
+		}
 
 		for ( const lv of levels ) {
 
@@ -206,6 +221,7 @@ fn _uwMapLookup( xz: vec2f, waves: bool ) -> UwMapSample {
 		}
 
 		for ( const lv of levels ) lv.kernel.dispatch( [ MAP_N / 8, MAP_N / 8, 1 ] );
+		primed = true;
 
 	};
 

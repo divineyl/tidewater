@@ -67,6 +67,17 @@ export const UPGRADES = {
 	] },
 };
 
+export const BOAT_PAINTS = Object.freeze( {
+	classic: { label: 'Classic Cream', topside: 0xf2efe6, stripe: 0x0f1a30 },
+	navy: { label: 'Deep Navy', topside: 0x1e3554, stripe: 0xf2efe6 },
+	coral: { label: 'Coral Sunset', topside: 0xc8553d, stripe: 0xf7e7ce },
+	emerald: { label: 'Lagoon Green', topside: 0x265c4b, stripe: 0xebd9b4 },
+	sunburst: { label: 'Harbor Yellow', topside: 0xd9a83c, stripe: 0x182538 },
+	midnight: { label: 'Midnight Slate', topside: 0x252c36, stripe: 0x5ce0d2 },
+} );
+
+export const BOAT_PAINT_IDS = Object.keys( BOAT_PAINTS );
+
 export const FUEL_PRICE = 1.5; // $ per litre of diesel at the chandlery
 // litres per second at the helm: idle plus a lot more at full rpm (40 L lasts ~25 min flat out)
 export function fuelBurn( rpm ) {

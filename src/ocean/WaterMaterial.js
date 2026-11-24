@@ -698,7 +698,8 @@ fn _waterSSR( posV: vec3f, Rv: vec3f, y0: f32, ry: f32 ) -> vec4f {
 	var t = 0.15 * stepScale;
 	var dt = 0.25 * stepScale;
 	var prevT = 0.0;
-	for ( var i = 0; i < 11; i++ ) {
+	let maxSteps = select( 6, 11, mat.ssr > 0.75 );
+	for ( var i = 0; i < maxSteps; i++ ) {
 		prevT = t;
 		if ( prevT >= 260.0 || ( ry <= 0.0 && y0 + ry * prevT < frame.seaLevel - 0.2 ) ) { break; }
 		t += dt;
@@ -719,7 +720,8 @@ fn _waterSSR( posV: vec3f, Rv: vec3f, y0: f32, ry: f32 ) -> vec4f {
 	if ( hit ) {
 		// refine between the last miss and the hit
 		var a = prevT; var b = t;
-		for ( var k = 0; k < 3; k++ ) {
+		let refSteps = select( 2, 3, mat.ssr > 0.75 );
+		for ( var k = 0; k < refSteps; k++ ) {
 			let m = ( a + b ) * 0.5;
 			let p = posV + Rv * m;
 			let behind = p.z < _waterSceneZAt( _waterProject( p ) );

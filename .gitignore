@@ -5,3 +5,6 @@ exports
 *.log
 *.tmp.jpg
 *.tmp.png
+desktop/node_modules
+desktop/app-dist
+desktop/out

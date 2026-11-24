@@ -3,6 +3,7 @@ import { G } from '../engine/render/Frame.js';
 import { HullLines, RHO_SEAWATER } from './boat/HullLines.js';
 import { GeoKit, triangleCount } from './boat/GeoKit.js';
 import { BoatMaterials } from './boat/BoatMaterials.js';
+import { BOAT_PAINTS } from '../game/Gear.js';
 import { buildHull, buildHullVolume, keelVolume, houseHalfWidth, KEEL } from './boat/HullBuilder.js';
 import { buildWheelhouse, wheelGeometry, throttleGeometry, radarArrayGeometry, HOUSE, roofTopY } from './boat/Wheelhouse.js';
 import { buildDeckGear, TRAPS, TRAP, HAULER } from './boat/DeckGear.js';
@@ -49,6 +50,7 @@ export class BoatModel {
 
 		const lines = this.lines = new HullLines();
 		const materials = this.materials = new BoatMaterials( lines );
+		this.paintId = 'classic';
 		const kit = new GeoKit();
 		const parts = {};
 
@@ -378,6 +380,16 @@ export class BoatModel {
 		}
 
 		return boxes;
+
+	}
+
+	setPaint( id ) {
+
+		const key = BOAT_PAINTS[ id ] ? id : 'classic';
+		this.paintId = key;
+		const spec = BOAT_PAINTS[ key ];
+		this.materials.setHullPaint( spec.topside, spec.stripe );
+		return key;
 
 	}
 

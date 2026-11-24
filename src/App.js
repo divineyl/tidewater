@@ -82,14 +82,16 @@ import { updateCameraVelocity, useStaticVelocity } from './post/CameraVelocity.j
 import { WeatherSystem } from './weather/WeatherSystem.js';
 import { Rain } from './fx/Rain.js';
 import { Lightning } from './fx/Lightning.js';
+import { MultiplayerManager } from './net/MultiplayerManager.js';
 
 const _up = new Vector3( 0, 1, 0 );
 
 export const QUALITY_PRESETS = {
-	eco: { renderScale: 0.65, aa: 4, shadows: false, ssr: false, ao: 0, motionBlur: 0, sharpen: 0.4, shaftScale: 0 },
-	balanced: { renderScale: 0.8, aa: 8, shadows: true, ssr: true, ao: 0.65, motionBlur: 0, sharpen: 0.45, shaftScale: 0.75 },
-	high: { renderScale: 1.0, aa: 8, shadows: true, ssr: true, ao: 1.0, motionBlur: 0.5, sharpen: 0.45, shaftScale: 1.0 },
-	ultra: { renderScale: 1.0, aa: 16, shadows: true, ssr: true, ao: 1.25, motionBlur: 0.5, sharpen: 0.55, shaftScale: 1.3 },
+	potato: { renderScale: 0.85, aa: 8, shadows: true, shadowsFast: true, ssr: true, ssrFast: true, ao: 0, motionBlur: 0, sharpen: 0.25, shaftScale: 0, cloudQuality: 'low', caustics: false },
+	eco: { renderScale: 0.88, aa: 8, shadows: true, shadowsFast: true, ssr: true, ssrFast: true, ao: 0, motionBlur: 0, sharpen: 0.30, shaftScale: 0, cloudQuality: 'low', caustics: true },
+	balanced: { renderScale: 0.92, aa: 8, shadows: true, shadowsFast: true, ssr: true, ssrFast: false, ao: 0.65, motionBlur: 0, sharpen: 0.38, shaftScale: 0.75, cloudQuality: 'medium', caustics: true },
+	high: { renderScale: 1.0, aa: 8, shadows: true, shadowsFast: false, ssr: true, ssrFast: false, ao: 1.0, motionBlur: 0.5, sharpen: 0.45, shaftScale: 1.0, cloudQuality: 'high', caustics: true },
+	ultra: { renderScale: 1.0, aa: 16, shadows: true, shadowsFast: false, ssr: true, ssrFast: false, ao: 1.25, motionBlur: 0.5, sharpen: 0.55, shaftScale: 1.3, cloudQuality: 'high', caustics: true },
 };
 
 export class App {
@@ -104,9 +106,24 @@ export class App {
 			renderScale: 1, // internal resolution (the temporal upscaler reconstructs the output), Performance tab
 		};
 		this.qs = new URLSearchParams( location.search );
+		try {
+
+			this._hasExistingPrefs = typeof localStorage !== 'undefined' && !! localStorage.getItem( 'tidewater.prefs.v1' );
+
+		} catch {
+
+			this._hasExistingPrefs = false;
+
+		}
 		this.prefs = createPrefsStore();
 		this.qualityPreset = 'high';
 		this.qualityShaftScale = 1;
+		this.cloudQuality = 'high';
+		this.causticsEnabled = true;
+		this._savedCausticsStrength = 1;
+		this.autoFps = false;
+		this._autoScaleTimer = 0;
+		this._targetRenderScale = 1;
 		this._photoShotRequested = false;
 		this._photoShotBusy = false;
 		this._photoShotTex = null;
@@ -466,6 +483,8 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		scene.add( this.lightning.mesh );
 		this.weather = new WeatherSystem( this );
 		this.applySavedPrefs( { scaleOverride: qs.has( 'scale' ) } );
+		this.mp = new MultiplayerManager( this );
+		if ( this.player ) this.player.mp = this.mp;
 		if ( typeof window !== 'undefined' ) {
 
 			window.addEventListener( 'beforeunload', () => this.saveRuntimeState( true ) );
@@ -625,7 +644,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		const u = this.ui?.ui;
 		if ( u && ( u._start || u._help ) ) return true;
 		const g = this.game;
-		if ( g?.hud && ( g.hud.invOpen || g.hud.standOpen ) ) return true;
+		if ( g?.hud && ( g.hud.invOpen || g.hud.standOpen || g.hud.journalOpen ) ) return true;
 		if ( g?.minimap && g.minimap.fullOpen ) return true;
 		if ( g?.guide && g.guide.open ) return true;
 		return false;
@@ -661,7 +680,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 			}
 
-			if ( this.player.mode !== 'boat' && this.player.mode !== 'deck' && this.player.mode !== 'vehicle' ) {
+			if ( this.player.mode !== 'boat' && this.player.mode !== 'deck' && this.player.mode !== 'vehicle' && this.player.mode !== 'coop' ) {
 
 				this.dropPlayerAtCamera();
 
@@ -796,6 +815,14 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 			}
 
+			if ( this.input.hit( 'KeyG' ) && ! this.freeCam ) {
+
+				if ( this.player.mode === 'boat' ) this.mp?.sendEmote?.( 'boat_horn' );
+				else if ( this.player.mode === 'vehicle' ) this.mp?.sendEmote?.( 'horn' );
+				else this.mp?.sendEmote?.( 'wave' );
+
+			}
+
 		}
 
 		const idleMoto = this.motorcycle && ! this.motorcycle.occupied && ! this.motorcycle.waterStalled && this.motorcycle.speed < 0.5;
@@ -850,13 +877,36 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		}
 
-		if ( this.caustics ) this.caustics.update();
+		const causticsHalf = this.qualityPreset === 'eco' || this.qualityPreset === 'balanced';
+		if ( this.caustics && this.causticsEnabled && this.caustics.strength.value > 0.001 && ( ! causticsHalf || ( this.engine.frame & 1 ) === 0 ) ) this.caustics.update();
 		// drawn while any part of the view can be under water (the specks above the surface are dropped)
 		this.marineSnow.update( this.camera, this.camera.position.y < ( this.cameraWaterHeight ?? 0 ) + LENS_REACH );
 		this.airMotes.update( dt, this.camera, this.cameraWaterHeight ?? 0 );
 		if ( this.rain ) this.rain.update( dt, this.camera, this.cameraWaterHeight ?? 0 );
-		if ( this.shoreSim ) this.shoreSim.update();
-		this.underwaterLighting.update( this.camera );
+		const lowSpec = this.qualityPreset === 'potato' || this.qualityPreset === 'eco';
+		const staggered = lowSpec || this.qualityPreset === 'balanced';
+		if ( this.shoreSim ) this.shoreSim.update( { camera: this.camera, lowSpec } );
+		this.underwaterLighting.update( this.camera, staggered );
+		if ( this.autoFps && dt > 0 && dt < 0.25 ) {
+
+			this._autoScaleTimer += dt;
+			if ( this._autoScaleTimer >= 1.8 ) {
+
+				this._autoScaleTimer = 0;
+				const fps = this.fps || 60;
+				if ( fps < 42 && this.settings.renderScale > 0.75 ) {
+
+					this.setRenderScale( Math.max( 0.75, this.settings.renderScale - 0.05 ), false );
+
+				} else if ( fps > 55 && this.settings.renderScale < this._targetRenderScale ) {
+
+					this.setRenderScale( Math.min( this._targetRenderScale, this.settings.renderScale + 0.05 ), false );
+
+				}
+
+			}
+
+		}
 		this.breakers.update( this.camera );
 		if ( this.vehicleFX ) this.vehicleFX.update( dt );
 		this.spray.update();
@@ -935,6 +985,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.boat.update( dt );
 		this.wildlife.update( dt, this.camera, this.freeCam ? null : this.player );
 		this.localLights.update( this.camera, dt );
+		if ( this.mp ) this.mp.update( dt );
 
 		// ---- render
 		G.exposure.value = s.exposure;
@@ -1012,12 +1063,38 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 	// Internal render resolution relative to the output (0.5..1), set by hand: changing it re-creates
 	// the scene / post / cloud targets, so nothing adjusts it automatically.
-	setRenderScale( v ) {
+	setRenderScale( v, updateTarget = true ) {
 
-		const scale = MathUtils.clamp( Math.round( v * 20 ) / 20, 0.5, 1 );
+		const scale = MathUtils.clamp( Math.round( v * 20 ) / 20, 0.4, 1 );
 		this.settings.renderScale = scale;
+		if ( updateTarget ) this._targetRenderScale = scale;
 		this.post.setScale( scale );
 		if ( this.clouds ) this.clouds.resolutionScale = scale;
+
+	}
+
+	setCloudQuality( mode ) {
+
+		const m = ( mode === 'off' || mode === 'low' || mode === 'medium' || mode === 'high' ) ? mode : 'high';
+		this.cloudQuality = m;
+		if ( this.clouds && this.clouds.setQuality ) this.clouds.setQuality( m );
+
+	}
+
+	setCausticsEnabled( on ) {
+
+		this.causticsEnabled = !! on;
+		if ( this.caustics ) {
+
+			if ( ! this.causticsEnabled && this.caustics.strength.value > 0.001 ) {
+
+				this._savedCausticsStrength = this.caustics.strength.value;
+
+			}
+
+			this.caustics.strength.value = this.causticsEnabled ? ( this._savedCausticsStrength || 1 ) : 0;
+
+		}
 
 	}
 
@@ -1030,15 +1107,23 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		this.post.aaMode = p.aa > 0 ? 'taa' : 'none';
 		if ( p.aa > 0 ) this.post.taau.jitterPhaseOverride = p.aa;
 		this.shadows.enabled = p.shadows;
-		if ( this.waterMaterial ) this.waterMaterial.params.ssr.value = p.ssr ? 1 : 0;
+		this.shadows.setFastMode?.( !! p.shadowsFast );
+		if ( this.vegetation ) this.vegetation.setFastMode?.( !! p.shadowsFast );
+		if ( this.waterMaterial ) this.waterMaterial.params.ssr.value = p.ssr ? ( p.ssrFast ? 0.5 : 1 ) : 0;
 		this.post.params.aoStrength.value = p.ao;
 		if ( this.post.motionBlur ) this.post.motionBlur.shutter.value = p.motionBlur;
 		this.post.params.sharpen.value = p.sharpen;
 		this.qualityShaftScale = p.shaftScale;
+		this.setCloudQuality( p.cloudQuality );
+		this.setCausticsEnabled( p.caustics );
 		if ( this.weather ) this.weather.applyToSystems( 0, true );
+		if ( this.ui ) this.ui.ui.setQualityPreset( id );
 		if ( save && this.prefs ) {
 
-			this.prefs.save( { qualityPreset: id, renderScale: p.renderScale, aa: p.aa, shadows: p.shadows, ssr: p.ssr } );
+			this.prefs.save( {
+				qualityPreset: id, renderScale: p.renderScale, aa: p.aa, shadows: p.shadows, ssr: p.ssr,
+				cloudQuality: p.cloudQuality, caustics: p.caustics,
+			} );
 
 		}
 
@@ -1048,22 +1133,38 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		if ( ! this.prefs ) return;
 		const p = this.prefs.data;
-		if ( p.qualityPreset && p.qualityPreset !== 'custom' && QUALITY_PRESETS[ p.qualityPreset ] ) {
+		const autoRec = ! this._hasExistingPrefs ? GPU.adapterInfo?.recommendedPreset : null;
+		if ( autoRec && autoRec !== 'high' && QUALITY_PRESETS[ autoRec ] ) {
 
+			const urlScale = scaleOverride ? this.settings.renderScale : null;
+			this.applyQualityPreset( autoRec, false );
+			if ( urlScale !== null ) this.setRenderScale( urlScale );
+
+		} else if ( p.qualityPreset && p.qualityPreset !== 'custom' && QUALITY_PRESETS[ p.qualityPreset ] ) {
+
+			const urlScale = scaleOverride ? this.settings.renderScale : null;
 			this.applyQualityPreset( p.qualityPreset, false );
+			if ( urlScale !== null ) this.setRenderScale( urlScale );
 
 		} else {
 
 			this.qualityPreset = 'custom';
+			if ( ! scaleOverride ) this.setRenderScale( p.renderScale );
+			const aa = Number( p.aa );
+			this.post.aaMode = aa > 0 ? 'taa' : 'none';
+			if ( aa > 0 ) this.post.taau.jitterPhaseOverride = aa;
+			this.shadows.enabled = !! p.shadows;
+			if ( this.waterMaterial ) this.waterMaterial.params.ssr.value = p.ssr ? 1 : 0;
+			this.setCloudQuality( p.cloudQuality );
+			this.setCausticsEnabled( p.caustics );
 
 		}
 
-		if ( ! scaleOverride ) this.setRenderScale( p.renderScale );
-		const aa = Number( p.aa );
-		this.post.aaMode = aa > 0 ? 'taa' : 'none';
-		if ( aa > 0 ) this.post.taau.jitterPhaseOverride = aa;
-		this.shadows.enabled = !! p.shadows;
-		if ( this.waterMaterial ) this.waterMaterial.params.ssr.value = p.ssr ? 1 : 0;
+		if ( this.vegetation ) this.vegetation.setFastMode?.( this.qualityPreset === 'potato' || this.qualityPreset === 'eco' || this.qualityPreset === 'balanced' );
+		this.autoFps = !! p.autoFps;
+		if ( this.ui ) this.ui.ui.setQualityPreset( this.qualityPreset );
+		if ( this.boat ) this.boat.setPaint?.( p.boatPaint );
+		if ( this.audio ) this.audio.setRadioEnabled?.( !! p.islandRadio );
 
 		if ( this.audio ) {
 
@@ -1279,6 +1380,8 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 				}
 
+				this.game?.onPhotoTaken?.();
+
 			}
 
 		} catch ( e ) {
@@ -1330,7 +1433,12 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		const metaParts = [ `${ hh }:${ mm }`, wLabel ];
 		if ( this.player?.mode === 'vehicle' && this.player.activeVehicle ) metaParts.push( tr( this.player.activeVehicle.name ) );
-		else if ( this.player?.mode === 'boat' ) metaParts.push( tr( 'Boat' ) );
+		else if ( this.player?.mode === 'boat' || this.player?.mode === 'deck' ) {
+
+			const bName = this.prefs?.data?.boatName;
+			metaParts.push( bName ? bName : tr( 'Boat' ) );
+
+		}
 		ctx.fillStyle = 'rgba(242, 239, 230, 0.82)';
 		ctx.font = `500 ${ Math.round( 13 * sc ) }px system-ui, "Segoe UI", sans-serif`;
 		ctx.fillText( metaParts.filter( Boolean ).join( '  ·  ' ), padX, h - padY );
@@ -1350,6 +1458,22 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		}
 
 		ctx.restore();
+
+	}
+
+	showGpuAdvisoryToast() {
+
+		const info = GPU.adapterInfo;
+		if ( ! info || ! this.ui ) return;
+		if ( info.isIntegrated || info.isSoftware ) {
+
+			const zh = getLang() === 'zh';
+			const msg = zh
+				? `检测到当前使用「${ info.name }」（${ info.isSoftware ? '软渲染' : '集成显卡' }），已优先适配流畅画质。若有独立显卡，请在 Windows「图形设置」为本程序指定高性能显卡。`
+				: `Running on ${ info.name } (${ info.isSoftware ? 'software' : 'integrated GPU' }). Assign your discrete GPU in Windows Graphics Settings for higher FPS.`;
+			this.ui.ui.toast( msg, 9000 );
+
+		}
 
 	}
 

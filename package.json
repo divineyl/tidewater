@@ -1,12 +1,13 @@
 {
   "name": "tidewater",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5189",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node test/game-logic.mjs && node test/vehicle-physics.mjs && node test/m1-systems.mjs && node test/m2-systems.mjs && node test/m3-systems.mjs && node test/bugfix-checks.mjs && node test/m4-systems.mjs",
-    "pack": "node scripts/pack-portable.mjs"
+    "test": "node test/game-logic.mjs && node test/vehicle-physics.mjs && node test/m1-systems.mjs && node test/m2-systems.mjs && node test/m3-systems.mjs && node test/bugfix-checks.mjs && node test/m4-systems.mjs && node test/m5-multiplayer.mjs && node test/m6-expansion.mjs",
+    "pack": "node scripts/pack-portable.mjs",
+    "pack:desktop": "node scripts/pack-desktop.mjs"
   },
   "devDependencies": {
     "vite": "^8.3.0",
@@ -14,5 +15,8 @@
   },
   "license": "MIT",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "peerjs": "^1.5.5"
+  }
 }

@@ -38,6 +38,7 @@ export class ShoreSim {
 			residueLife: [ 'f32', 5.0 ],
 			foamGen: [ 'f32', 1.0 ],
 			depositGain: [ 'f32', 0.02 ], // foam per drop
+			dtScale: [ 'f32', 1.0 ],
 		} );
 		const F = this.uniforms.fields;
 		this.uMin = F.min;
@@ -48,6 +49,9 @@ export class ShoreSim {
 		this.residueLife = F.residueLife;
 		this.foamGen = F.foamGen;
 		this.depositGain = F.depositGain;
+		this.dtScale = F.dtScale;
+		this._frame = 0;
+		this._center = center.clone();
 
 		// tileable lace (bubble strands, bubbles, mottling, per-cell random), generated once on the CPU
 		this.lace = makeLaceTexture();
@@ -185,7 +189,7 @@ fn main( @builtin( global_invocation_id ) gid: vec3u ) {
 	let p = shoreSimP.min + uv * shoreSimP.size;
 	let ground = terrainHeightAt( p );
 	let depth = frame.seaLevel - ground;
-	let dt = frame.dt;
+	let dt = frame.dt * shoreSimP.dtScale;
 
 	let here = textureLoad( shoreSimStateTex, vec2i( gid.xy ), 0 );
 	let di = gid.y * ${ res }u + gid.x;
@@ -248,8 +252,19 @@ fn main( @builtin( global_invocation_id ) gid: vec3u ) {
 
 	}
 
-	update() {
+	update( { camera = null, lowSpec = false } = {} ) {
 
+		this._frame ++;
+		let stride = lowSpec ? 2 : 1;
+		if ( camera && camera.position ) {
+
+			const dist = Math.hypot( camera.position.x - this._center.x, camera.position.z - this._center.y );
+			if ( dist > 280 ) stride = 4;
+
+		}
+
+		if ( this._frame > 1 && ( this._frame % stride ) !== 0 ) return;
+		this.dtScale.value = stride;
 		this.kernel.dispatch( this.kernel.groups( this.res, this.res ) );
 		const size = { width: this.res, height: this.res };
 		GPU.getEncoder().copyTextureToTexture( { texture: this.stateB.getGPU() }, { texture: this.stateA.getGPU() }, size );

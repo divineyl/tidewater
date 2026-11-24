@@ -277,6 +277,19 @@ export class Vegetation {
 
 	}
 
+	setFastMode( fast ) {
+
+		const f = !! fast;
+		uCanopyNear.value.set( f ? 48 : TREE_NEAR, f ? 34 : SHRUB_NEAR );
+		for ( const t of [ this.monsteras, this.broadleaf ] ) {
+
+			if ( ! t ) continue;
+			for ( const m of t.meshes ) m.castShadow = ! f;
+
+		}
+
+	}
+
 	// Re-upload the terrain height texture used by the grass after terrain.flatten() & co.
 	// (plant placement is computed once in the constructor: build Vegetation after terrain edits).
 	refreshTerrain() {

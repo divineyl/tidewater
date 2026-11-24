@@ -76,9 +76,68 @@ function weatherDelayMul( habitat, weather ) {
 
 }
 
+function lureSpeciesMul( id, lure = 'standard' ) {
+
+	if ( lure === 'reefJig' ) {
+
+		if ( id === 'goldenTrevally' || id === 'yellowtail' || id === 'grouper' || id === 'wrasse' || id === 'parrot' || id === 'angel' ) return 1.45;
+		return 1;
+
+	}
+
+	if ( lure === 'liveBait' ) {
+
+		if ( id === 'sailfish' || id === 'blueMarlin' || id === 'tuna' || id === 'mahi' || id === 'barracuda' || id === 'tarpon' || id === 'redSnapper' ) return 1.45;
+		return 1;
+
+	}
+
+	if ( lure === 'stormLure' ) {
+
+		if ( id === 'blueMarlin' || id === 'sailfish' || id === 'tuna' || id === 'mahi' || id === 'barracuda' ) return 1.65;
+		return 0.85;
+
+	}
+
+	return 1;
+
+}
+
+function legendaryGateMul( f, hour, weather, lure ) {
+
+	if ( ! f || ! f.condition ) return 1;
+	const rain = Math.min( 1, Math.max( 0, weather?.rainIntensity || 0 ) );
+	const storm = Math.min( 1, Math.max( 0, weather?.stormIntensity || 0 ) );
+	if ( f.condition === 'storm_boss' ) {
+
+		if ( lure !== 'stormLure' ) return 0;
+		return 1.35 + storm * 0.9 + rain * 0.35;
+
+	}
+
+	if ( f.condition === 'pelagic_sail' ) {
+
+		if ( lure !== 'liveBait' && lure !== 'stormLure' ) return 0;
+		const isGoldenTime = ( hour >= 5 && hour <= 8 ) || ( hour >= 17 && hour <= 20 );
+		return 1.15 + ( isGoldenTime ? 0.35 : 0 ) + storm * 0.25;
+
+	}
+
+	if ( f.condition === 'reef_golden' ) {
+
+		if ( lure !== 'reefJig' ) return 0;
+		const isGoldenTime = ( hour >= 5.5 && hour <= 8 ) || ( hour >= 16.5 && hour <= 19.5 );
+		return 1.2 + ( isGoldenTime ? 0.35 : 0 );
+
+	}
+
+	return 1;
+
+}
+
 // Weighted pick of the species that bites here; null when nothing lives here.
 // rng: () => [0, 1)
-export function pickSpecies( habitat, hour, rng = Math.random, weather = null ) {
+export function pickSpecies( habitat, hour, rng = Math.random, weather = null, lure = 'standard' ) {
 
 	let total = 0;
 	const w = [];
@@ -87,7 +146,8 @@ export function pickSpecies( habitat, hour, rng = Math.random, weather = null ) 
 		const f = FISH[ id ];
 		let hw = 0;
 		for ( const k in f.habitat ) hw += f.habitat[ k ] * habitat[ k ];
-		const x = hw * f.rarity * activity( f.time, hour ) * weatherSpeciesMul( id, weather );
+		const gate = legendaryGateMul( f, hour, weather, lure );
+		const x = gate > 0 ? hw * f.rarity * activity( f.time, hour ) * weatherSpeciesMul( id, weather ) * lureSpeciesMul( id, lure ) * gate : 0;
 		w.push( x );
 		total += x;
 
@@ -107,16 +167,17 @@ export function pickSpecies( habitat, hour, rng = Math.random, weather = null ) 
 }
 
 // Weight in kg: skewed toward the small end (most fish are small, trophies are rare)
-export function rollWeight( id, rng = Math.random ) {
+export function rollWeight( id, rng = Math.random, lure = 'standard' ) {
 
 	const [ a, b ] = FISH[ id ].kg;
-	const t = Math.pow( rng(), 2.2 );
+	const exp = lure === 'liveBait' ? 1.75 : lure === 'stormLure' ? 1.9 : 2.2;
+	const t = Math.pow( rng(), exp );
 	return a + ( b - a ) * t;
 
 }
 
 // Seconds until the next bite at this spot: richer water bites sooner. Infinity when barren.
-export function biteDelay( habitat, hour, rng = Math.random, weather = null ) {
+export function biteDelay( habitat, hour, rng = Math.random, weather = null, lure = 'standard' ) {
 
 	let rich = 0;
 	for ( const k in habitat ) rich += habitat[ k ];
@@ -124,7 +185,10 @@ export function biteDelay( habitat, hour, rng = Math.random, weather = null ) {
 	// open water between the named habitats still has fish: never much slower than a poor spot
 	rich = Math.max( rich, 0.35 );
 	const light = hour > 6 && hour < 19 ? 1 : 0.8;
-	const mean = ( 8 / ( Math.min( rich, 1.6 ) * light ) ) * weatherDelayMul( habitat, weather );
+	let lureMul = 1;
+	if ( lure === 'reefJig' && ( habitat.reef || 0 ) > 0.35 ) lureMul = 0.88;
+	else if ( lure === 'stormLure' && weather && ( ( weather.rainIntensity || 0 ) > 0.2 || ( weather.stormIntensity || 0 ) > 0.2 ) ) lureMul = 0.85;
+	const mean = ( 8 / ( Math.min( rich, 1.6 ) * light ) ) * weatherDelayMul( habitat, weather ) * lureMul;
 	return 2 + - Math.log( 1 - rng() * 0.98 ) * mean * 0.6;
 
 }

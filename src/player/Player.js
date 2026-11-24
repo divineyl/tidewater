@@ -103,6 +103,9 @@ export class Player {
 		this._ashoreT = 0;
 		// set by the fishing game: while a line is out the helm / step ashore prompts give way
 		this.busy = false;
+		// co-op passenger / deck guest on a friend's boat or buggy
+		this.mp = null;
+		this.coop = null;
 
 	}
 
@@ -175,6 +178,13 @@ export class Player {
 
 		}
 
+		if ( this.mode === 'coop' ) {
+
+			this.updateCoop( dt );
+			return;
+
+		}
+
 		const look = inp.consumeLook();
 		this.yaw -= look.x * 0.0022;
 		this.pitch = THREE.MathUtils.clamp( this.pitch - look.y * 0.0022, - 1.5, 1.5 );
@@ -204,6 +214,24 @@ export class Player {
 
 					this.mountVehicle( nv );
 					return;
+
+				}
+
+			} else if ( this.mp && typeof this.mp.findNearestBoardablePeer === 'function' ) {
+
+				const peerCraft = this.mp.findNearestBoardablePeer( this.position );
+				if ( peerCraft ) {
+
+					this.prompt = {
+						key: 'X',
+						text: peerCraft.kind === 'boat' ? 'Board friend\'s boat' : 'Ride in friend\'s buggy',
+					};
+					if ( inp.hit( 'KeyX' ) ) {
+
+						this.boardRemotePeer( peerCraft );
+						return;
+
+					}
 
 				}
 
@@ -864,6 +892,110 @@ export class Player {
 			this.camPos.lerp( want, 1 - Math.exp( - dt * 6 ) );
 			this.camera.position.copy( this.camPos );
 			this.camera.lookAt( target );
+
+		}
+
+	}
+
+	// ------------------------------------------------------------------ co-op riding on a friend's craft
+
+	boardRemotePeer( { peerId, kind } ) {
+
+		this.coop = {
+			peerId,
+			kind: kind === 'buggy' ? 'buggy' : 'boat',
+			localPos: kind === 'buggy' ? new THREE.Vector3( - 0.34, 0.92, - 0.14 ) : new THREE.Vector3( 0, 0.68, - 1.6 ),
+			localYaw: 0,
+		};
+		this.mode = 'coop';
+		this.velocity.set( 0, 0, 0 );
+		this.pitch = - 0.05;
+		this._camY = null;
+
+	}
+
+	leaveRemotePeer() {
+
+		const st = this.coop && this.mp ? this.mp.getPeerRenderState( this.coop.peerId ) : null;
+		const wasBoat = this.coop?.kind === 'boat';
+		if ( st ) {
+
+			const yaw = st.yaw || 0;
+			const ox = Math.cos( yaw ) * ( wasBoat ? 2.1 : 1.65 );
+			const oz = - Math.sin( yaw ) * ( wasBoat ? 2.1 : 1.65 );
+			const tx = st.x + ox;
+			const tz = st.z + oz;
+			const g = this.groundAt( tx, tz, st.y + 3 );
+			this.position.set( tx, Math.max( g, this.waterMean - SWIM_EYE + 0.15 ), tz );
+
+		}
+
+		this.coop = null;
+		this.velocity.set( 0, 0, 0 );
+		this._camY = null;
+		const depth = ( this.waterMean ?? 0 ) - this.groundAt( this.position.x, this.position.z, this.position.y + 3 );
+		this.mode = depth > SWIM_DEPTH ? 'swim' : 'walk';
+
+	}
+
+	updateCoop( dt ) {
+
+		const c = this.coop;
+		const st = c && this.mp ? this.mp.getPeerRenderState( c.peerId ) : null;
+		const validTarget = st && ( ( c.kind === 'boat' && st.mode === 'boat' ) || ( c.kind === 'buggy' && st.mode === 'vehicle' && st.vehId === 'buggy' ) );
+		if ( ! validTarget ) {
+
+			this.leaveRemotePeer();
+			return;
+
+		}
+
+		const inp = this.input;
+		const look = inp.consumeLook();
+		c.localYaw -= look.x * 0.0022;
+		this.pitch = THREE.MathUtils.clamp( this.pitch - look.y * 0.0022, - 1.45, 1.45 );
+
+		if ( c.kind === 'boat' ) {
+
+			const sy = Math.sin( c.localYaw ), cy = Math.cos( c.localYaw );
+			_fwd.set( sy, 0, cy );
+			_right.set( - cy, 0, sy );
+			_wish.set( 0, 0, 0 );
+			const move = inp.getMoveAxes();
+			_wish.addScaledVector( _fwd, move.y );
+			_wish.addScaledVector( _right, move.x );
+			if ( _wish.lengthSq() > 1e-4 ) {
+
+				_wish.normalize().multiplyScalar( ( inp.down( 'ShiftLeft' ) ? 2.4 : 1.5 ) * dt );
+				c.localPos.x = THREE.MathUtils.clamp( c.localPos.x + _wish.x, - 0.88, 0.88 );
+				c.localPos.z = THREE.MathUtils.clamp( c.localPos.z + _wish.z, - 2.75, 0.12 );
+
+			}
+
+		}
+
+		const pyaw = st.yaw || 0;
+		const cy = Math.cos( pyaw ), sy = Math.sin( pyaw );
+		const wx = st.x + c.localPos.x * cy + c.localPos.z * sy;
+		const wy = st.y + c.localPos.y;
+		const wz = st.z - c.localPos.x * sy + c.localPos.z * cy;
+		this.position.set( wx, wy, wz );
+		this.yaw = pyaw + Math.PI + c.localYaw;
+
+		const eyeY = wy + ( c.kind === 'buggy' ? 0.54 : EYE );
+		this.camera.position.set( wx, eyeY, wz );
+		this._camY = eyeY;
+		this.camera.quaternion.setFromEuler( _e.set( this.pitch, this.yaw, 0 ) );
+
+		if ( ! this.busy ) {
+
+			this.prompt = { key: 'X', text: c.kind === 'boat' ? 'Leave friend\'s boat' : 'Leave friend\'s buggy' };
+			if ( inp.hit( 'KeyX' ) || inp.hit( 'KeyE' ) ) {
+
+				this.leaveRemotePeer();
+				return;
+
+			}
 
 		}
 

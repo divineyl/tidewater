@@ -47,8 +47,12 @@ const PRESET = {
 	weather: { resolution: 1024, mainMass: [ 4, 5, 0, 1.32 ], detail: [ 6, 6, 1, 0.13 ], coverage: 0.26 },
 };
 
-// sky-pro "high" quality
-const QUALITY = { historyDivisor: 2, lattice: 4, maxSteps: 256, lightTaps: 6, stepMeters: 25, fullLightingAlpha: 0.5, lightReuseSteps: 3, historyWeight: 0.9 };
+// sky-pro quality tiers
+export const CLOUD_QUALITIES = {
+	high: { historyDivisor: 2, lattice: 4, maxSteps: 256, lightTaps: 6, stepMeters: 25, fullLightingAlpha: 0.5, lightReuseSteps: 3, historyWeight: 0.9, skipOdd: false },
+	medium: { historyDivisor: 2, lattice: 4, maxSteps: 128, lightTaps: 4, stepMeters: 45, fullLightingAlpha: 0.5, lightReuseSteps: 4, historyWeight: 0.9, skipOdd: false },
+	low: { historyDivisor: 3, lattice: 4, maxSteps: 56, lightTaps: 2, stepMeters: 85, fullLightingAlpha: 0.5, lightReuseSteps: 4, historyWeight: 0.92, skipOdd: true },
+};
 
 const PANO_W = 512, PANO_H = 160; // same mapping as sky/Clouds.js (elevation -4..90 deg, v = sqrt)
 const PANO_LATTICE = 4; // 1/16 of the panorama per frame
@@ -532,6 +536,7 @@ export class SkyProClouds {
 		this.cirrus = { value: 0.48 };
 		this.resolutionScale = 1;
 		this.outputSize = null;
+		this.quality = 'high';
 
 		// ---- textures
 		this.noise = new Texture( { label: 'cloud shape noise 64³', width: 64, height: 64, depth: 64, dimension: '3d', format: 'rgba8unorm', usage: [ 'sample', 'copyDst' ] } );
@@ -645,6 +650,7 @@ export class SkyProClouds {
 			shadowCenter: [ 'vec2f', new Vector2() ],
 			shadowSize: [ 'f32', 12000 ],
 			shadowStrength: [ 'f32', 0.85 ],
+			enabled: [ 'f32', 1 ],
 		}, { label: 'clouds' } );
 		const U = this.params.fields;
 		this.viewCam = { right: U.viewRight, up: U.viewUp, fwd: U.viewFwd, tan: U.viewTan };
@@ -652,6 +658,7 @@ export class SkyProClouds {
 		this.shadowCenter = U.shadowCenter;
 		this.shadowSize = U.shadowSize;
 		this.shadowStrength = U.shadowStrength;
+		this.enabled = U.enabled;
 
 		this.shadowModule = new ShaderModule( {
 			name: 'cloudsShadow',
@@ -673,6 +680,7 @@ fn cloudsShadow( worldXZ: vec2f ) -> f32 {
 	return cloudsShadowMemo;
 }
 fn _cloudsShadow( worldXZ: vec2f ) -> f32 {
+	if ( cloudsParams.enabled < 0.5 ) { return 1.0; }
 	let uv = ( worldXZ - cloudsParams.shadowCenter ) / cloudsParams.shadowSize + 0.5;
 	let st = uv * ${ f( SHADOW_RES ) } - 0.5;
 	let i0 = vec2i( floor( st ) );
@@ -697,6 +705,7 @@ fn _cloudsShadow( worldXZ: vec2f ) -> f32 {
 			code: /* wgsl */`
 // vec4( rgb in-scattered radiance, a transmittance ) for a view direction (panorama)
 fn cloudsSample( dir: vec3f ) -> vec4f {
+	if ( cloudsParams.enabled < 0.5 ) { return vec4f( 0.0, 0.0, 0.0, 1.0 ); }
 	let az = atan2( dir.z, dir.x );
 	let u = fract( az / ${ f( 2 * Math.PI ) } );
 	let elev = - acos( clamp( dir.y, -1.0, 1.0 ) ) + ${ f( Math.PI / 2 ) };
@@ -714,6 +723,7 @@ fn cloudsSunTransmittance( T: f32 ) -> f32 { return T * smoothstep( 0.004, 0.04,
 // The main view's clouds: the temporally reconstructed half resolution history, looked up with the
 // camera it was resolved for; outside it (or before any trace) the panorama
 fn cloudsSampleView( dir: vec3f ) -> vec4f {
+	if ( cloudsParams.enabled < 0.5 ) { return vec4f( 0.0, 0.0, 0.0, 1.0 ); }
 	let x = dot( dir, cloudsParams.viewRight );
 	let y = dot( dir, cloudsParams.viewUp );
 	let z = dot( dir, cloudsParams.viewFwd );
@@ -998,7 +1008,7 @@ ${ MAIN } {
 
 	_allocate( w, h ) {
 
-		const q = QUALITY;
+		const q = CLOUD_QUALITIES[ this.quality ] || CLOUD_QUALITIES.high;
 		const scale = this.resolutionScale;
 		this.sourceWidth = Math.max( 1, Math.ceil( w * scale / q.historyDivisor / q.lattice ) );
 		this.sourceHeight = Math.max( 1, Math.ceil( h * scale / q.historyDivisor / q.lattice ) );
@@ -1070,9 +1080,40 @@ ${ MAIN } {
 
 	}
 
+	setQuality( mode ) {
+
+		const next = ( mode === 'off' || mode === 'low' || mode === 'medium' || mode === 'high' ) ? mode : 'high';
+		if ( next === this.quality ) return;
+		const wasOff = this.quality === 'off';
+		this.quality = next;
+		const on = next !== 'off';
+		if ( this.enabled ) this.enabled.value = on ? 1 : 0;
+		if ( ! on ) {
+
+			this.viewValid.value = 0;
+			this.historyValid = false;
+
+		} else {
+
+			this._w = 0;
+			this.invalidate();
+
+		}
+
+	}
+
 	update( dt, camera ) {
 
-		const q = QUALITY, P = PRESET, F = this.F, S = this.S;
+		if ( this.quality === 'off' ) {
+
+			if ( this.enabled ) this.enabled.value = 0;
+			this.viewValid.value = 0;
+			return;
+
+		}
+
+		if ( this.enabled ) this.enabled.value = 1;
+		const q = CLOUD_QUALITIES[ this.quality ] || CLOUD_QUALITIES.high, P = PRESET, F = this.F, S = this.S;
 		dt = Math.min( 0.1, Math.max( 0, dt ) );
 
 		// ---- output size
@@ -1242,6 +1283,13 @@ ${ MAIN } {
 		F.shadow.value = [ this.shadowCenter.value.x, this.shadowCenter.value.y, this.shadowSize.value, phase ];
 
 		// ---- dispatches
+		if ( q.skipOdd && ( this.frameIndex & 1 ) === 1 && this.historyValid && this._shadowInit && ! this.panoWarm ) {
+
+			this.frameIndex ++;
+			return;
+
+		}
+
 		const underwater = G.cameraUnderwater && G.cameraUnderwater.value > 0.5;
 		if ( ! this._shadowInit ) {
 

@@ -170,6 +170,9 @@ export class SoundScape {
 		this._vehActive = 0;
 		this._rainNodes = null;
 		this._noiseBuf = null;
+		this._radioOn = false;
+		this._radioTimer = 0.8;
+		this._radioIdx = 0;
 		const sw = WORLD.swellDir || { x: - 0.12, y: - 1 };
 		const l = Math.hypot( sw.x, sw.y ) || 1;
 		this._swell = { x: sw.x / l, z: sw.y / l }; // travel direction of the swell = towards the beach
@@ -272,6 +275,13 @@ export class SoundScape {
 
 	}
 
+	setRadioEnabled( on ) {
+
+		this._radioOn = !! on;
+		if ( this._radioOn ) this._radioTimer = Math.min( this._radioTimer, 0.5 );
+
+	}
+
 	// Per frame: listener pose, mixer ramps and surf / life events at ~30 Hz. Cheap.
 	update( dt, state ) {
 
@@ -293,6 +303,7 @@ export class SoundScape {
 			this._whale( now, step );
 			this._reel( now );
 			this._vehicle( now, step );
+			this._updateRadio( step );
 
 		} catch ( e ) {
 
@@ -1734,6 +1745,112 @@ export class SoundScape {
 		g.connect( this.vehSum );
 		o.start( now );
 		o.stop( now + 0.16 );
+
+	}
+
+	boatHorn() {
+
+		if ( ! this.enabled || this._muted || ! this.ctx || ! this.above ) return;
+		const c = this.ctx;
+		const now = c.currentTime;
+		const g = c.createGain();
+		g.gain.setValueAtTime( 0.0001, now );
+		g.gain.linearRampToValueAtTime( 0.12, now + 0.05 );
+		g.gain.setValueAtTime( 0.12, now + 0.42 );
+		g.gain.exponentialRampToValueAtTime( 0.0001, now + 0.62 );
+		g.connect( this.vehBus || this.above );
+
+		for ( const freq of [ 185, 233 ] ) {
+
+			const o = c.createOscillator();
+			o.type = 'sawtooth';
+			o.frequency.value = freq;
+			const lp = c.createBiquadFilter();
+			lp.type = 'lowpass';
+			lp.frequency.value = 820;
+			o.connect( lp );
+			lp.connect( g );
+			o.start( now );
+			o.stop( now + 0.65 );
+
+		}
+
+	}
+
+	uiChime( kind = 'chat' ) {
+
+		if ( ! this.enabled || this._muted || ! this.ctx || ! this.near ) return;
+		const c = this.ctx;
+		const now = c.currentTime;
+		const dest = ( this._subBus && this._subBus.fishing ) || this.near;
+		const seqs = {
+			chat: [ [ 659.25, 0, 0.07 ], [ 880, 0.06, 0.10 ] ],
+			emote: [ [ 587.33, 0, 0.08 ], [ 783.99, 0.06, 0.12 ] ],
+			checkpoint: [ [ 523.25, 0, 0.08 ], [ 783.99, 0.07, 0.12 ] ],
+			reward: [ [ 523.25, 0, 0.12 ], [ 659.25, 0.08, 0.14 ], [ 783.99, 0.16, 0.16 ], [ 1046.5, 0.24, 0.24 ] ],
+			tourney: [ [ 440, 0, 0.12 ], [ 554.37, 0.09, 0.14 ], [ 659.25, 0.18, 0.16 ], [ 880, 0.27, 0.28 ] ],
+		};
+		const notes = seqs[ kind ] || seqs.chat;
+		for ( const [ freq, off, dur ] of notes ) {
+
+			const o = c.createOscillator();
+			o.type = 'triangle';
+			o.frequency.value = freq;
+			const g = c.createGain();
+			g.gain.setValueAtTime( 0.0001, now + off );
+			g.gain.linearRampToValueAtTime( 0.055, now + off + 0.015 );
+			g.gain.exponentialRampToValueAtTime( 0.0001, now + off + dur );
+			o.connect( g );
+			g.connect( dest );
+			o.start( now + off );
+			o.stop( now + off + dur + 0.02 );
+
+		}
+
+	}
+
+	_updateRadio( dt ) {
+
+		if ( ! this._radioOn || ! this.enabled || this._muted || ! this.ctx || this.env.u > 0.5 ) return;
+		this._radioTimer -= dt;
+		if ( this._radioTimer > 0 ) return;
+		this._radioTimer = 4.6 + Math.random() * 2.0;
+
+		const chords = [
+			[ 261.63, 329.63, 392.00, 493.88 ], // Cmaj7
+			[ 220.00, 261.63, 329.63, 392.00 ], // Am7
+			[ 174.61, 220.00, 261.63, 329.63 ], // Fmaj7
+			[ 196.00, 246.94, 293.66, 392.00 ], // G6
+		];
+		const chord = chords[ this._radioIdx % chords.length ];
+		this._radioIdx ++;
+
+		const c = this.ctx;
+		const now = c.currentTime;
+		const dest = ( this._subBus && this._subBus.ambient ) || this.above;
+		if ( ! dest ) return;
+
+		for ( let i = 0; i < chord.length; i ++ ) {
+
+			const freq = chord[ i ];
+			const off = i * 0.09;
+			const o = c.createOscillator();
+			o.type = 'sine';
+			o.frequency.value = freq;
+			const lp = c.createBiquadFilter();
+			lp.type = 'lowpass';
+			lp.frequency.value = 950;
+			const g = c.createGain();
+			g.gain.setValueAtTime( 0.0001, now + off );
+			g.gain.linearRampToValueAtTime( 0.022, now + off + 0.45 );
+			g.gain.exponentialRampToValueAtTime( 0.0001, now + off + 3.8 );
+			o.connect( lp );
+			lp.connect( g );
+			g.connect( dest );
+			o.start( now + off );
+			o.stop( now + off + 3.9 );
+
+		}
 
 	}
 

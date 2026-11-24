@@ -42,6 +42,7 @@ export class SunShadows {
 			dirty: true,
 		} ) );
 		this.enabled = true;
+		this.fastMode = false;
 		this.layerMask = 0xffffffff;
 		this.frame = 0;
 		this.lastSun = new Vector3( 0, - 2, 0 );
@@ -120,6 +121,15 @@ export class SunShadows {
 
 	}
 
+	setFastMode( fast ) {
+
+		const f = !! fast;
+		this.fastMode = f;
+		ShadowUniforms.fields.pcssCascades.value = f ? 0 : 1;
+		this.periods = this.splits.map( ( _, i ) => f ? ( i === 0 ? 2 : i === 1 ? 4 : 8 ) : ( i === 0 ? 1 : i === 1 ? 2 : 4 ) );
+
+	}
+
 	// Decide which cascades re-render this frame and fit them. Returns the list of indices.
 	update( camera, sunDir ) {
 
@@ -134,6 +144,7 @@ export class SunShadows {
 
 			if ( sunMoved || this.cascades[ i ].dirty || ( this.frame + i ) % this.periods[ i ] === 0 ) {
 
+				if ( this.fastMode && out.length >= 1 && ! sunMoved && ! this.cascades[ i ].dirty ) continue;
 				this._fit( i, camera, sunDir );
 				this.cascades[ i ].dirty = false;
 				out.push( i );

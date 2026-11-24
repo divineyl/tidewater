@@ -1,5 +1,6 @@
-import { FISH, fishValue, fishLengthCm } from './FishTable.js';
+import { FISH, LURES, fishValue, fishLengthCm } from './FishTable.js';
 import { defaultUpgrades, gearStats, nextLevel, UPGRADES, FUEL_PRICE } from './Gear.js';
+import { generateBounties, sanitizeBounties } from './Bounties.js';
 
 const SAVE_KEY = 'tidewater.save.v1';
 
@@ -18,6 +19,11 @@ export class GameState {
 		this.lastCatch = null;
 		this.upgrades = defaultUpgrades();
 		this.fuel = null; // litres left (null = full tank)
+		this.lure = 'standard';
+		this.bounties = generateBounties( 101 );
+		this.bountiesDone = 0;
+		this.landmarks = {}; // id -> { visited: true, photo: boolean }
+		this.rallyBest = { motorcycle: null, buggy: null };
 		this._nextId = 1;
 		this.listeners = new Set();
 
@@ -186,9 +192,84 @@ export class GameState {
 
 	}
 
+	setLure( id ) {
+
+		if ( ! LURES[ id ] ) return false;
+		this.lure = id;
+		this.save();
+		this.emit();
+		return true;
+
+	}
+
+	addMoney( amount ) {
+
+		const delta = Math.round( Number( amount ) || 0 );
+		if ( delta <= 0 ) return 0;
+		this.money += delta;
+		this.save();
+		this.emit();
+		return delta;
+
+	}
+
+	refreshBounties( seed = Date.now() ) {
+
+		this.bounties = generateBounties( seed );
+		this.save();
+		this.emit();
+		return this.bounties;
+
+	}
+
+	recordLandmark( id, isPhoto = false, reward = 0 ) {
+
+		if ( ! id ) return { isNew: false, isNewPhoto: false };
+		const prev = this.landmarks[ id ] && typeof this.landmarks[ id ] === 'object'
+			? this.landmarks[ id ]
+			: { visited: !! this.landmarks[ id ], photo: false };
+		const isNew = ! prev.visited;
+		const isNewPhoto = !! ( isPhoto && ! prev.photo );
+		if ( ! isNew && ! isNewPhoto ) return { isNew: false, isNewPhoto: false };
+
+		this.landmarks[ id ] = { visited: true, photo: prev.photo || !! isPhoto };
+		if ( reward > 0 ) this.money += Math.round( reward );
+		this.save();
+		this.emit();
+		return { isNew, isNewPhoto };
+
+	}
+
+	recordRallyTime( vehicleId, sec ) {
+
+		const key = vehicleId === 'buggy' ? 'buggy' : 'motorcycle';
+		const t = Math.round( Number( sec ) * 100 ) / 100;
+		if ( ! Number.isFinite( t ) || t <= 0 ) return { isRecord: false, prevBest: null };
+		const prevBest = this.rallyBest[ key ];
+		const isRecord = prevBest === null || t < prevBest;
+		if ( isRecord ) this.rallyBest[ key ] = t;
+		this.save();
+		this.emit();
+		return { isRecord, prevBest };
+
+	}
+
 	toJSON() {
 
-		return { v: 1, money: this.money, inventory: this.inventory, log: this.log, upgrades: this.upgrades, fuel: this.fuel, nextId: this._nextId };
+		return {
+			v: 1,
+			money: this.money,
+			inventory: this.inventory,
+			log: this.log,
+			upgrades: this.upgrades,
+			fuel: this.fuel,
+			lure: this.lure,
+			bounties: this.bounties,
+			bountiesDone: this.bountiesDone,
+			landmarks: this.landmarks,
+			rallyBest: this.rallyBest,
+			nextId: this._nextId,
+		};
 
 	}
 
@@ -203,6 +284,25 @@ export class GameState {
 		for ( const [ k, v ] of Object.entries( this.log ) ) if ( FISH[ k ] && v && v.bestKg > 0 && ! Number.isFinite( v.bestCm ) ) v.bestCm = Math.round( fishLengthCm( k, v.bestKg ) );
 		this.upgrades = { ...defaultUpgrades(), ...( d.upgrades || {} ) };
 		this.fuel = Number.isFinite( d.fuel ) ? d.fuel : null;
+		this.lure = LURES[ d.lure ] ? d.lure : 'standard';
+		this.bounties = sanitizeBounties( d.bounties );
+		this.bountiesDone = Math.max( 0, Number( d.bountiesDone ) | 0 );
+		this.landmarks = {};
+		if ( d.landmarks && typeof d.landmarks === 'object' ) {
+
+			for ( const [ lk, lv ] of Object.entries( d.landmarks ) ) {
+
+				if ( lv ) this.landmarks[ lk ] = { visited: true, photo: !! ( lv && lv.photo ) };
+
+			}
+
+		}
+
+		const rb = d.rallyBest && typeof d.rallyBest === 'object' ? d.rallyBest : {};
+		this.rallyBest = {
+			motorcycle: Number.isFinite( rb.motorcycle ) && rb.motorcycle > 0 ? rb.motorcycle : null,
+			buggy: Number.isFinite( rb.buggy ) && rb.buggy > 0 ? rb.buggy : null,
+		};
 		this._nextId = Math.max( d.nextId | 0, ...this.inventory.map( ( f ) => f.id + 1 ), 1 );
 		return true;
 
@@ -242,6 +342,11 @@ export class GameState {
 		this.log = {};
 		this.upgrades = defaultUpgrades();
 		this.fuel = null;
+		this.lure = 'standard';
+		this.bounties = generateBounties( 101 );
+		this.bountiesDone = 0;
+		this.landmarks = {};
+		this.rallyBest = { motorcycle: null, buggy: null };
 		this.save();
 		this.emit();
 
